@@ -1,0 +1,12 @@
+# TRINETRA — Phase 2 (MVP) runtime dependencies
+# Frozen per docs/DEPENDENCY_DECISIONS.md — 8 install lines, verified on M4 Air (macOS 26.6.2)
+# venv: python3.11.9 | verified M0 2026-09-09
+
+torch==2.14.0
+torchvision==0.29.0
+ultralytics==8.4.144
+opencv-python==5.0.0.93
+numpy==2.4.6
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+python-multipart==0.0.32

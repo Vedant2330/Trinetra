@@ -1,0 +1,36 @@
+# TRINETRA configuration — Phase 2 MVP
+# All zones/sources runtime state lives in SQLite (data/trinetra.db), not here.
+# This file defines process-level settings only.
+
+[device]
+# auto | mps | cpu  — auto: use MPS if available, fall back to CPU on failure
+policy = "auto"
+
+[vision]
+model = "yolov8n.pt"
+conf = 0.35
+imgsz = 640
+max_frame_width = 1280
+classes = [0, 1, 2, 3, 5, 7]          # person bicycle car motorcycle bus truck
+
+[tracking]
+min_confirm_frames = 3
+lost_timeout_frames = 30
+history_len = 60
+
+[fence]
+confirm_frames = 3
+exit_grace_frames = 10
+
+[events]
+cooldown_seconds = 10
+snapshot_min_severity = "MEDIUM"
+
+[stream]
+mjpeg_quality = 70
+max_fps = 20
+
+[paths]
+uploads = "uploads"
+data = "data"
+retention_days = 7
