@@ -174,6 +174,20 @@ class DetectorTracker:
 
         return self._extract(results)
 
+    # ---- warm-up ----
+
+    def warmup(self, frame: np.ndarray) -> None:
+        """One predict() call — warms the inference graph WITHOUT touching
+        ByteTrack state (predict bypasses the tracker; verified M3).
+        Session-only use; output discarded; creates no detections."""
+        self._require_ready()
+        self._validate_frame(frame)
+        try:
+            self._model.predict(frame, conf=self._conf, imgsz=self._imgsz,
+                                classes=self._classes, verbose=False)
+        except Exception as e:  # noqa: BLE001 — warm-up failure must not kill session
+            log.warning("warm-up inference failed: %s", str(e)[:120])
+
     # ---- internals ----
 
     def _require_ready(self) -> None:
