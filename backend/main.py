@@ -15,6 +15,7 @@ import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -22,10 +23,12 @@ from pydantic import BaseModel
 
 from backend.api import events as events_api
 from backend.api import evidence as evidence_api
+from backend.api import map as map_api
+from backend.api import sources as sources_api
 from backend.api import stream as stream_api
 from backend.api import zones as zones_api
 from backend.core import config as cfg
-from backend.core.config import DEVICE, MODELS_DIR, PATHS, STREAM, VISION
+from backend.core.config import DEVICE, PATHS, STREAM
 from backend.core.errors import install as api_install
 from backend.db import DAO, Database
 from backend.db.migrations import MIGRATIONS
@@ -43,11 +46,14 @@ from backend.vision import DetectorError
 
 log = logging.getLogger("trinetra.main")
 
-app = FastAPI(title="TRINETRA", version="0.5.0-m5")
+app = FastAPI(title="TRINETRA", version="0.7.0-m7")
 app.include_router(zones_api.router)
 app.include_router(events_api.router)
 app.include_router(evidence_api.router)
 app.include_router(stream_api.router)
+app.include_router(map_api.router)
+app.include_router(sources_api.router)
+app.include_router(sources_api.sessions_router)
 
 _STARTED = time.time()
 
@@ -110,7 +116,9 @@ def health() -> dict:
 def session_start(req: StartRequest) -> dict:
     """F1: the REST product path hands the session the FULL app stack
     (SQLite zones, DAO, writer, hub) — sessions see real zones, events
-    persist, SSE publishes, sessions/tracks rows are written."""
+    persist, SSE publishes, sessions/tracks rows are written.
+    C7: model missing => 503 with an actionable message (server stays
+    up; restoring the weights recovers the NEXT start — no restart)."""
     from backend.core.errors import get_zone_store, get_dao, get_hub
     if not (cfg.MODELS_DIR / cfg.VISION.model).exists():
         raise HTTPException(
@@ -243,3 +251,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app.router.lifespan_context = lifespan
+
+
+# ---- M7: serve the built Command Center bundle (non-critical) ----
+# If frontend/dist exists (npm run build), the operator UI is served at
+# /. If it does not, the API works exactly as before — the UI is NEVER a
+# boot dependency. Map/tile failures degrade only the map panel.
+
+from fastapi.staticfiles import StaticFiles  # noqa: E402 — after app
+
+_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+if _DIST.is_dir():
+    app.mount("/", StaticFiles(directory=_DIST, html=True),
+              name="command-center")
+    log.info("command center bundle served from %s", _DIST)
+else:
+    log.info("no command center bundle (frontend/dist absent) — API-only")

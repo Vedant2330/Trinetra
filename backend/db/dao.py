@@ -291,3 +291,91 @@ class DAO:
 
     def user_version(self) -> int:
         return self.db.user_version()
+
+    # ---- M7 geographic layer (ADR-002/003; distinct from video zones) ----
+
+    def sources_rows(self) -> list[sqlite3.Row]:
+        """All known sources (cameras) with their lat/lng/label when set.
+        Latitude/longitude are NULL unless configured — NO fabricated
+        values (ADR-002: 'absent/null when not applicable')."""
+        geo_cols = self._geo_columns()
+        cols = (", ".join(geo_cols) if geo_cols
+                else "NULL AS latitude, NULL AS longitude, NULL AS label")
+        return self.conn.execute(
+            f"SELECT id, name, type, uri, status, created_at, {cols}"
+            f" FROM sources ORDER BY created_at").fetchall()
+
+    def _geo_columns(self) -> list[str]:
+        """Migration 2 may not be applied yet on an older DB — check the
+        pragma instead of crashing (map must degrade, never break boot)."""
+        names = {r[1] for r in self.conn.execute(
+            "PRAGMA table_info(sources)")}
+        have = [c for c in ("latitude", "longitude", "label") if c in names]
+        return have if len(have) == 3 else []
+
+    def _has_geo_sectors(self) -> bool:
+        try:
+            self.conn.execute(
+                "SELECT 1 FROM geo_sectors LIMIT 1").fetchone()
+            return True
+        except sqlite3.Error:
+            return False
+
+    def set_source_geo(self, source_id: str, latitude: float,
+                       longitude: float, label: str = "") -> bool:
+        """Attach real coordinates to a camera. Returns False when the
+        source row does not exist (404 upstream) or the geo migration
+        is not applied (503-ish upstream)."""
+        if not self._geo_columns():
+            return False
+        cur = self.conn.execute(
+            "UPDATE sources SET latitude=?, longitude=?,"
+            " label=COALESCE(NULLIF(?,''), label) WHERE id=?",
+            (latitude, longitude, label, source_id))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def insert_geo_sector(self, sector_id: str, name: str, kind: str,
+                          description: str, polygon_json: str,
+                          active: bool = True) -> bool:
+        if not self._has_geo_sectors():
+            return False
+        now = _now()
+        self.conn.execute(
+            """
+            INSERT INTO geo_sectors(id, name, kind, description, polygon,
+                                    active, created_at, updated_at)
+            VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+              name=excluded.name, kind=excluded.kind,
+              description=excluded.description, polygon=excluded.polygon,
+              active=excluded.active, updated_at=excluded.updated_at
+            """,
+            (sector_id, name, kind, description, polygon_json,
+             int(active), now, now))
+        self.conn.commit()
+        return True
+
+    def geo_sectors_rows(self, active_only: bool = False
+                         ) -> list[sqlite3.Row]:
+        if not self._has_geo_sectors():
+            return []
+        where = "WHERE active=1" if active_only else ""
+        return self.conn.execute(
+            f"SELECT * FROM geo_sectors {where} ORDER BY created_at"
+        ).fetchall()
+
+    def get_geo_sector(self, sector_id: str) -> Optional[sqlite3.Row]:
+        if not self._has_geo_sectors():
+            return None
+        return self.conn.execute(
+            "SELECT * FROM geo_sectors WHERE id=?", (sector_id,)).fetchone()
+
+    def delete_geo_sector(self, sector_id: str) -> bool:
+        try:
+            cur = self.conn.execute(
+                "DELETE FROM geo_sectors WHERE id=?", (sector_id,))
+            self.conn.commit()
+            return cur.rowcount > 0
+        except sqlite3.Error:
+            return False

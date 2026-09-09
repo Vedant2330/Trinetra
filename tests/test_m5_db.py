@@ -40,13 +40,15 @@ def dao(db):
 def test_fresh_db_migrates_0_to_1(tmp_path):
     d = Database(tmp_path / "fresh.db")
     applied = d.migrate(MIGRATIONS)
-    assert applied == 1
-    assert d.user_version() == 1
+    # M7: migrations 1 (M5 core schema) + 2 (geo layer) apply in order
+    assert applied == 2
+    assert d.user_version() == 2
     tables = {r[0] for r in
               d.conn().execute("SELECT name FROM sqlite_master"
                                " WHERE type='table'").fetchall()}
     assert {"sources", "zones", "sessions", "tracks", "events",
             "evidence"} <= tables
+    assert "geo_sectors" in tables          # M7 geographic layer
     d.close_all()
 
 
@@ -55,7 +57,7 @@ def test_second_boot_noop_on_populated_db(tmp_path):
     zero migrations applied, data intact."""
     path = tmp_path / "populated.db"
     d1 = Database(path)
-    assert d1.migrate(MIGRATIONS) == 1
+    assert d1.migrate(MIGRATIONS) == 2      # M5 core + M7 geo layer
     dao1 = DAO(d1)
     dao1.upsert_source("file:x.mp4", "file", "uri")
     dao1.insert_session("file:x.mp4")
@@ -88,8 +90,8 @@ def test_failed_migration_transactional_user_version_untouched(tmp_path):
     assert "sources" not in tables and "oops" not in tables
     # a correct boot then succeeds from scratch
     ok = Database(tmp_path / "broken.db")
-    assert ok.migrate(MIGRATIONS) == 1
-    assert ok.user_version() == 1
+    assert ok.migrate(MIGRATIONS) == 2
+    assert ok.user_version() == 2
     d.close_all()
     ok.close_all()
 

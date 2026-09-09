@@ -7,3 +7,7 @@ __pycache__/
 .pytest_cache/
 .env
 *.key
+
+# M7 frontend
+frontend/node_modules/
+frontend/dist/

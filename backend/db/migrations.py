@@ -79,4 +79,24 @@ MIGRATIONS: dict[int, str] = {
     CREATE INDEX idx_tracks_session ON tracks(session_id);
     CREATE INDEX idx_zones_source ON zones(source_id);
     """,
+    # M7 (ADR-002 §14 future-migrations pattern): geographic layer.
+    # GEOGRAPHIC/OPERATIONAL zones — polygons in lat/lng on the map.
+    # DISTINCT concept from the `zones` table (video-space, normalized
+    # frame coordinates); never merged, never conflated (ADR-002 MANDATE).
+    2: """
+    CREATE TABLE geo_sectors(
+      id TEXT PRIMARY KEY,
+      name TEXT,
+      kind TEXT DEFAULT 'sector',
+      description TEXT,
+      polygon TEXT,
+      active INT DEFAULT 1,
+      created_at TEXT,
+      updated_at TEXT
+    );
+    ALTER TABLE sources ADD COLUMN latitude REAL;
+    ALTER TABLE sources ADD COLUMN longitude REAL;
+    ALTER TABLE sources ADD COLUMN label TEXT;
+    CREATE INDEX idx_geo_sectors_active ON geo_sectors(active);
+    """,
 }

@@ -1,4 +1,4 @@
-# TRINETRA — Demo Checklist (M6)
+# TRINETRA — Demo Checklist (M6 + M7)
 
 Two-minute demo script + the failure rows that are **MANUAL-ONLY** (honestly
 labeled — never faked as automated tests). RTSP is Phase 3 (P3) — noted
@@ -21,6 +21,44 @@ where relevant, not part of this demo.
    across a server restart (zones, events, sessions, tracks).
 7. Draw a line with `direction_mode:"forward"` → a reverse crossing is
    suppressed; a forward crossing fires LINE_CROSSING with `direction`.
+
+## M7 Command Center local demo (verified 2026-09-09)
+
+Prereq: `cd frontend && npm install && npm run build` (dist/ committed-free,
+built locally). One-time demo data (video zone + simulated camera geo +
+demo sector) — create via the real API once:
+
+```bash
+# RESTRICTED video-space zone over the runner band (same as M6 demo)
+curl -X POST localhost:8000/api/zones -H 'Content-Type: application/json' \
+  -d '{"source_id":"file:running_clip.mp4","name":"South Band","kind":"polygon","type":"RESTRICTED","geometry":{"points":[[0.05,0.55],[0.95,0.55],[0.95,0.98],[0.05,0.98]]}}'
+# simulated camera coordinates (UI labels them SIMULATED)
+curl -X PUT localhost:8000/api/map/cameras/file:running_clip.mp4/geo -H 'Content-Type: application/json' \
+  -d '{"latitude":12.9716,"longitude":77.5946,"label":"North Gate Camera"}'
+# demo geo sector (distinct from video zones)
+curl -X POST localhost:8000/api/map/sectors -H 'Content-Type: application/json' \
+  -d '{"name":"Demo Operational Area","kind":"sector","description":"M7 demo (simulated)","polygon":[[12.9700,77.5920],[12.9730,77.5930],[12.9725,77.5970],[12.9705,77.5960]]}'
+```
+
+1. `./venv/bin/uvicorn backend.main:app --port 8000` (keep running)
+2. Open **http://localhost:8000/** — Command Center (no white page, no console errors)
+3. Source select → `tests/assets/running_clip.mp4` → Start — live annotated MJPEG feed
+   renders in the feed panel (~36–41 FPS on MPS), video-zone overlay drawn on the canvas
+4. Events panel: SSE-live PERSON/ZONE ENTRY rows with severity chips; click the
+   ZONE ENTRY row → Event Detail: camera `North Gate Camera`, video zone `South Band`,
+   geo sector `Demo Operational Area`, evidence snapshot thumbnail (click → full image)
+5. Map panel: Google satellite renders (key from `.env`); camera marker + sector
+   polygon; no-key or blocked tiles degrade roadmap → offline schematic (same data,
+   SIMULATED COORDINATES banner)
+6. Camera panel ↔ map marker: camera goes `live` while a session runs, `idle` after
+   stop (real rows, no fabrication)
+7. ACK an event → chip flips ✓ ACKED
+8. Stop session → SESSION_COMPLETED event lands; camera marker → idle
+9. Optional M6 API-only drill: `/api/health` writer/db green; SSE tab
+   `curl -N localhost:8000/api/stream/events` shows keepalives + live events
+
+Verified in this environment: all steps via real Chromium (Playwright) +
+curl; webcam NOT available (file source used per honesty rule).
 
 ## MANUAL-ONLY drills (cannot be automated honestly on this machine)
 
