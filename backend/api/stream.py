@@ -1,8 +1,13 @@
-"""TRINETRA live streams API (M5, §16).
+"""TRINETRA live streams API (M5 §16, M6 C1 async).
 
 GET /api/stream/events — SSE: one JSON frame per committed event,
 auto-reconnect built into the EventSource protocol (§16 frozen: SSE over
 WebSocket — control is REST; polling fallback = /api/events).
+
+M6 C1: the endpoint is an ASYNC generator (poll-and-drain —
+await asyncio.sleep(0.05) + get_nowait(); to_thread(q.get) is BANNED:
+each waiting client would pin a threadpool thread). The hub's sync
+thread-safe fan-out is untouched (M5 hub unit tests stay green).
 """
 
 from __future__ import annotations
@@ -26,11 +31,11 @@ _SSE_HEADERS = {
 
 
 @router.get("/events")
-def stream_events() -> StreamingResponse:
+async def stream_events() -> StreamingResponse:
     hub = get_hub()
 
-    def gen():
-        for event in hub.stream():
+    async def gen():
+        async for event in hub.stream_async():
             if event.get("keepalive"):
                 yield ": keepalive\n\n"
             else:

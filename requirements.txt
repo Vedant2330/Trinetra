@@ -1,9 +1,12 @@
 # TRINETRA — Phase 2 (MVP) runtime dependencies
-# Frozen per docs/DEPENDENCY_DECISIONS.md — 9 install lines, verified on M4 Air (macOS 26.6.2)
+# Frozen per docs/DEPENDENCY_DECISIONS.md — 10 install lines, verified on M4 Air (macOS 26.6.2)
 # venv: python3.11.9 | verified M0 2026-09-09
 # httpx pinned explicitly (M5 C7): starlette's TestClient hard-imports it;
 # it was only transitively present via ultralytics — an upstream bump would
 # silently break the suite. Pinned at the installed version; zero new install.
+# psutil (M6 C6): TEST-ONLY dependency — bench.py B4 RSS sampling + fd-count
+# assertions in the churn drill (pytest.importorskip-guarded; production
+# code paths never import it). Already present transitively (7.2.2).
 
 torch==2.14.0
 torchvision==0.29.0
@@ -14,3 +17,4 @@ fastapi==0.141.1
 uvicorn[standard]==0.52.4
 python-multipart==0.0.32
 httpx==0.28.1
+psutil==7.2.2

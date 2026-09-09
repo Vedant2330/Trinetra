@@ -302,7 +302,10 @@ def test_source_lost_via_mock_session(tmp_path, monkeypatch):
     import backend.events.engine as eng_mod
     import backend.services.session as sess_mod
     monkeypatch.setattr(eng_mod, "EVIDENCE_DIR", tmp_path / "ev")
-    monkeypatch.setattr(sess_mod, "_MAX_CONSECUTIVE_READ_FAILS", 5)
+    monkeypatch.setattr(sess_mod, "SOURCES",
+                        type("S", (), {"backoff_base_s": 0.01,
+                                       "backoff_cap_s": 0.05,
+                                       "decode_fail_limit": 5})())
 
     db = Database(tmp_path / "lost.db")
     db.migrate(MIGRATIONS)
@@ -532,7 +535,10 @@ def test_eof_finalize_order_drain_before_status(tmp_path, monkeypatch):
     status update; final status=error (mock source) + stats JSON on the
     row, via the SAME finalize the stop path uses."""
     import backend.services.session as sess_mod
-    monkeypatch.setattr(sess_mod, "_MAX_CONSECUTIVE_READ_FAILS", 5)
+    monkeypatch.setattr(sess_mod, "SOURCES",
+                        type("S", (), {"backoff_base_s": 0.01,
+                                       "backoff_cap_s": 0.05,
+                                       "decode_fail_limit": 5})())
     db, dao, writer, hub, zones = make_stack(tmp_path)
     try:
         from backend.services.session import ProcessingSession

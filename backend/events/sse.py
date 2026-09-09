@@ -72,10 +72,11 @@ class SseHub:
         with self._lock:
             return len(self._clients)
 
-    def stream(self) -> Iterator[dict]:
-        """Generator for a StreamingResponse body. Sends a keepalive
-        comment every ~5s of silence so proxies/clients don't cut the
-        line (and so live-path tests observe traffic quickly)."""
+    def stream(self) -> "Iterator[dict]":
+        """SYNC generator (M5 surface — hub unit tests pin this).
+        Sends a keepalive comment every ~5s of silence. The ASYNC
+        endpoint path uses stream_async() (C1); this stays for tests
+        and any sync consumer."""
         import time
         cid, client = self.subscribe()
         try:
@@ -84,6 +85,37 @@ class SseHub:
                     yield client.q.get(timeout=5.0)
                 except queue.Empty:
                     yield {"keepalive": True, "ts": time.time()}
+        finally:
+            self.unsubscribe(cid)
+            if client.dropped:
+                log.info("sse client %x dropped %d events (slow reader)",
+                         cid, client.dropped)
+
+    async def stream_async(self):
+        """ASYNC generator for the FastAPI endpoint (M6 C1): poll-and-
+        drain — await asyncio.sleep(0.05) + get_nowait() loop. BANNED:
+        await asyncio.to_thread(q.get, timeout=...) — it re-imports the
+        threadpool cap problem (every waiting client pins a threadpool
+        thread). Hub internals (sync thread-safe fan-out) untouched:
+        keepalive, prune-on-disconnect (finally/CancelledError), and
+        drop-oldest semantics all survive from the M5 unit tests."""
+        import asyncio
+        import time
+        cid, client = self.subscribe()
+        try:
+            while True:
+                try:
+                    yield client.q.get_nowait()
+                except queue.Empty:
+                    # quiet slice: brief async sleep (event loop stays
+                    # live for OTHER clients), then keepalive at 5s
+                    await asyncio.sleep(0.05)
+                    if client.q.empty():
+                        # approximate 5s keepalive cadence via sentinel
+                        yield {"keepalive": True, "ts": time.time()}
+                        await asyncio.sleep(4.9)
+        except (GeneratorExit, asyncio.CancelledError):
+            raise                      # prune via finally
         finally:
             self.unsubscribe(cid)
             if client.dropped:

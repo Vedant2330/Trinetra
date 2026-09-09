@@ -3,8 +3,16 @@
 Behavior:
   - open(): validates path; probes with cv2.VideoCapture (open + first-frame
     read) to reject invalid/unsupported/empty videos EARLY with SourceError.
-  - read(): returns FramePacket or None. First None after normal exhaustion
-    sets state=EOF. A mid-file decode failure sets state=ERROR (distinct).
+  - read(): returns FramePacket or None. C3 (M6, the must-fix): a failed
+    read is split into END-OF-STREAM vs DECODE-FAILURE —
+      * frame_count KNOWN (container metadata) and index >= count-1:
+        the ok=False is EOS (normal exhaustion) -> state=EOF;
+      * otherwise it is a decode failure (corrupt/truncated mid-file) ->
+        counted in a fail streak; the SESSION aborts at
+        sources.decode_fail_limit (default 60) consecutive failures.
+    Caveat (honest, documented): containers reporting frame_count==0
+    (some streams/MKV variants) cannot distinguish EOS from corruption —
+    the streak cap is the only guard there. This is §20's mid-file row.
   - Codec support is whatever the local OpenCV/FFmpeg build decodes.
     No universal-codec claims. MP4 (H.264) verified on this machine.
   - Never loops. Never resizes. Original decoded frames only.
@@ -22,6 +30,8 @@ from backend.sources.base import FramePacket, SourceError, SourceState, VideoSou
 
 
 class FileSource(VideoSource):
+    is_live = False         # C2: live-source flag (webcam: True)
+
     def __init__(self, path: str | Path) -> None:
         self._path = self._require_file(path)
         self._cap: Optional[cv2.VideoCapture] = None
@@ -30,6 +40,7 @@ class FileSource(VideoSource):
         self._frame_count = 0
         self._state = SourceState.IDLE
         self._eof_reached = False
+        self._decode_fails = 0       # consecutive decode failures (C3)
         self.source_id = f"file:{self._path.name}"
 
     # ---- properties ----
@@ -47,6 +58,11 @@ class FileSource(VideoSource):
     def frame_count(self) -> int:
         """Container-declared frame count (0 if unknown)."""
         return self._frame_count
+
+    @property
+    def decode_fails(self) -> int:
+        """Consecutive decode failures since the last good frame (C3)."""
+        return self._decode_fails
 
     @property
     def size(self) -> tuple[int, int]:
@@ -73,6 +89,12 @@ class FileSource(VideoSource):
             self._frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             self._cap = cap
             self._state = SourceState.OPEN
+            # M6 fix: a RE-open (release+open, e.g. benchmark loop-the-
+            # clip) must reset EOF + decode state — the stale flags
+            # otherwise short-circuit read() forever.
+            self._eof_reached = False
+            self._decode_fails = 0
+            self._index = -1
         except SourceError:
             cap.release()
             raise
@@ -85,13 +107,20 @@ class FileSource(VideoSource):
 
         ok, frame = self._cap.read()
         if not ok:
-            # cv2 returns ok=False at end-of-stream for seekable files.
-            # Normal exhaustion => EOF. open() already proved the file decodes
-            # (first-frame probe), so a read failure here is EOS, not corruption.
-            self._eof_reached = True
-            self._state = SourceState.EOF
+            # C3: split EOS from decode-failure using the container's own
+            # frame count. Known count + index at the end => EOS. Anything
+            # else => corruption streak (session aborts at the limit).
+            at_end = (self._frame_count > 0
+                      and self._index >= self._frame_count - 1)
+            if at_end:
+                self._eof_reached = True
+                self._state = SourceState.EOF
+                return None
+            self._decode_fails += 1
+            self._state = SourceState.ERROR   # decode failure (not EOF)
             return None
         self._index += 1
+        self._decode_fails = 0
         video_ts = self._index / self._fps if self._fps > 0 else None
         return FramePacket(
             frame=frame,

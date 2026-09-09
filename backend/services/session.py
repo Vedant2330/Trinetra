@@ -45,7 +45,7 @@ import numpy as np
 
 from backend.analytics import FenceAnalytic, FrameContext, ZoneStore
 from backend.analytics.base import EventDraft
-from backend.core.config import STREAM, TRACKING, VISION
+from backend.core.config import SOURCES, STREAM, TRACKING, VISION
 from backend.events import EventEngine, SseHub
 from backend.db.dao import DAO
 from backend.db.writer import EventWriter
@@ -58,7 +58,8 @@ from backend.vision.annotation import annotate
 log = logging.getLogger("trinetra.session")
 
 _FPS_WINDOW = 30          # rolling window for pipeline FPS (documented metric)
-_MAX_CONSECUTIVE_READ_FAILS = 60   # ~3s at 20fps -> abort (webcam gone)
+# M6 C2/C3: read-fail limits live in config [sources] (decode_fail_limit
+# for files; webcam uses the backoff ladder — no fixed read-fail cap).
 _IS_NIGHT_LUMA = 40.0     # §3 step 3: is_night = mean-gray < 40 (named constant)
 
 _VEHICLE_CLASSES = frozenset(
@@ -70,11 +71,20 @@ class SessionError(Exception):
 
 
 def _sys_draft(type_: str) -> EventDraft:
-    """System draft (§13): SOURCE_*/SESSION_COMPLETED — INFO severity,
-    no tracks, no zone, no snapshot (A1: jpeg=None)."""
+    """System draft (§13): SOURCE_*/SESSION_COMPLETED/SOURCE_RECONNECTED
+    (M6 9th type) — INFO severity, no tracks, no zone, no snapshot
+    (A1: jpeg=None). System events BYPASS the engine cooldown (verified:
+    _pass_cooldown is skipped for _SYSTEM_TYPES) so SOURCE_LOST fires
+    exactly once per disconnect cycle via the one-shot flag (C2)."""
     return EventDraft(
         type=type_, track_ids=[], zone_id=None, direction=None,
         confidence=1.0, metadata={"is_night": False, "system": True})
+
+
+def _sys_ctx(tick: int, wall_ts: float) -> FrameContext:
+    """Minimal FrameContext for system-event commits."""
+    return FrameContext(tick=tick, wall_ts=wall_ts, video_ts=None,
+                        luminance=128.0, is_night=False, shape=(1, 1))
 
 
 class ProcessingSession:
@@ -212,21 +222,61 @@ class ProcessingSession:
         self.status = "running"
         tick = 0
         read_fails = 0
+        decode_fails = 0                 # file decode-fail streak (C3)
+        backoff_delay = SOURCES.backoff_base_s   # webcam ladder (C2)
+        lost_emitted = False              # one-shot SOURCE_LOST flag (C2)
         try:
             while not self._stop.is_set():
                 t0 = time.perf_counter()
                 pkt = self._source.read()
                 if pkt is None:
-                    if self._source.state.value == "EOF":
+                    st = self._source.state.value
+                    if st == "EOF":
                         self.status = "completed"
                         break
+                    if st == "ERROR" and getattr(self._source, "is_live",
+                                                 False):
+                        # ---- C2: webcam disconnect ladder ----
+                        # DIVERGENCE (documented per C2): FILE sources
+                        # keep the abort path (decode_fails >= limit ->
+                        # error); WEBCAM sources back off and re-open.
+                        # The session owns the ladder; the source owns
+                        # reopen(). Delays are interruptible via the
+                        # stop event — NEVER time.sleep.
+                        if not lost_emitted:
+                            lost_emitted = True     # one-shot; re-armed
+                            self._commit(          # on reconnect
+                                [_sys_draft("SOURCE_LOST")], None,
+                                _sys_ctx(tick, time.time()))
+                        if self._stop.wait(backoff_delay):
+                            break                  # stop-during-backoff
+                        if self._source.reopen():
+                            lost_emitted = False   # re-arm the flag
+                            backoff_delay = SOURCES.backoff_base_s
+                            self._commit(
+                                [_sys_draft("SOURCE_RECONNECTED")], None,
+                                _sys_ctx(tick, time.time()))
+                        else:
+                            backoff_delay = min(backoff_delay * 2,
+                                                SOURCES.backoff_cap_s)
+                        continue
+                    # ---- file (or non-live) read failure ----
                     read_fails += 1
-                    if read_fails >= _MAX_CONSECUTIVE_READ_FAILS:
-                        # A5: SOURCE_LOST before the status flip
+                    decode_fails += 1
+                    if decode_fails >= SOURCES.decode_fail_limit:
+                        # C3: corrupt/truncated mid-file -> honest error
+                        # (SOURCE_LOST fires first — the source is gone)
+                        if not lost_emitted:
+                            lost_emitted = True
+                            self._commit(
+                                [_sys_draft("SOURCE_LOST")], None,
+                                _sys_ctx(tick, time.time()))
                         raise RuntimeError(
-                            "source read failed repeatedly (device gone?)")
-                    continue
+                            f"file decode failed {decode_fails} consecutive "
+                            f"reads (corrupt/truncated?)")
+                    continue                     # skip + count (§20)
                 read_fails = 0
+                decode_fails = 0
 
                 # A5: SOURCE_CONNECTED after open + FIRST successful read
                 if not self._connected_emitted:
@@ -295,16 +345,9 @@ class ProcessingSession:
             self.status = "error"
             self.error = f"{type(e).__name__}: {e}"
             log.exception("processing loop failed")
-            # A5: SOURCE_LOST on read-fail abort (before status=error set
-            # above is already done — but the draft is emitted HERE)
-            if "read failed repeatedly" in str(e):
-                try:
-                    sys_ctx = FrameContext(
-                        tick=tick, wall_ts=time.time(), video_ts=None,
-                        luminance=128.0, is_night=False, shape=(1, 1))
-                    self._commit([_sys_draft("SOURCE_LOST")], None, sys_ctx)
-                except Exception:  # noqa: BLE001 — best effort on error path
-                    log.warning("SOURCE_LOST draft emission failed")
+            # SOURCE_LOST was already emitted in-loop (one-shot flag,
+            # C2) for both the ladder and file-abort paths — nothing to
+            # do here; the flag guarantees exactly-once per cycle.
         finally:
             self._source.release()
             self._finalize()
@@ -314,7 +357,11 @@ class ProcessingSession:
     def _finalize(self) -> None:
         """flush tracks -> DB -> SESSION_COMPLETED -> writer drain ->
         status flip. Runs exactly once (idempotent guard); error path =
-        best-effort flush (honest partial)."""
+        best-effort flush (honest partial). M6 churn: closes THIS
+        thread's DB connection at the end — session threads are
+        per-session and their sqlite connections must not outlive them
+        (fd-leak guard; Database reaps dead-thread conns lazily, but the
+        session owning its own teardown is deterministic)."""
         if self._finalized:
             return
         self._finalized = True
@@ -348,6 +395,9 @@ class ProcessingSession:
                 self._writer.drain(timeout=5.0)
         except Exception as e:  # noqa: BLE001 — finalize is best-effort
             log.error("session finalize failed (best-effort partial): %s", e)
+        finally:
+            if self._dao is not None:
+                self._dao.db.close()   # THIS thread's conn only
 
     def _stats_payload(self) -> dict:
         fence = self._analytics[0] if self._analytics else None

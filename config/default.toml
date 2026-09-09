@@ -30,7 +30,20 @@ snapshot_min_severity = "MEDIUM"
 mjpeg_quality = 70
 max_fps = 20
 
+# --- M6 hardening (§20) ---
+[sources]
+# Webcam disconnect ladder: SOURCE_LOST -> backoff 1->2->4->8s (capped),
+# interruptible (never time.sleep) -> reopen -> SOURCE_RECONNECTED once.
+backoff_base_s = 1.0
+backoff_cap_s = 8.0
+# Consecutive decode failures that abort a FILE session mid-stream (§20
+# corrupt-truncated-file row). < limit = skip+count; >= limit = error.
+decode_fail_limit = 60
+
 [paths]
 uploads = "uploads"
 data = "data"
 retention_days = 7
+# Disk-low evidence gate (C12): snapshots skipped (event still commits,
+# flagged snapshot_skipped_low_disk) when free space falls below this.
+min_free_mb = 200

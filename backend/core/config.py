@@ -67,6 +67,7 @@ class PathsCfg:
     uploads: str = "uploads"
     data: str = "data"
     retention_days: int = 7
+    min_free_mb: int = 200
 
     @property
     def uploads_dir(self) -> Path:
@@ -77,6 +78,16 @@ class PathsCfg:
         return ROOT / self.data
 
 
+@dataclass(frozen=True)
+class SourcesCfg:
+    """M6 §20 hardening knobs — webcam backoff ladder + file decode-fail
+    abort limit (C10). Ladder is capped at backoff_cap_s; delays are
+    interruptible (session stop event), never time.sleep."""
+    backoff_base_s: float = 1.0
+    backoff_cap_s: float = 8.0
+    decode_fail_limit: int = 60
+
+
 def _build() -> tuple:
     d = _RAW.get("device", {})
     v = _RAW.get("vision", {})
@@ -85,6 +96,7 @@ def _build() -> tuple:
     e = _RAW.get("events", {})
     s = _RAW.get("stream", {})
     p = _RAW.get("paths", {})
+    so = _RAW.get("sources", {})
     return (
         DeviceCfg(policy=d.get("policy", "auto")),
         VisionCfg(
@@ -115,11 +127,17 @@ def _build() -> tuple:
             uploads=str(p.get("uploads", "uploads")),
             data=str(p.get("data", "data")),
             retention_days=int(p.get("retention_days", 7)),
+            min_free_mb=int(p.get("min_free_mb", 200)),
+        ),
+        SourcesCfg(
+            backoff_base_s=float(so.get("backoff_base_s", 1.0)),
+            backoff_cap_s=float(so.get("backoff_cap_s", 8.0)),
+            decode_fail_limit=int(so.get("decode_fail_limit", 60)),
         ),
     )
 
 
-DEVICE, VISION, TRACKING, FENCE, EVENTS, STREAM, PATHS = _build()
+DEVICE, VISION, TRACKING, FENCE, EVENTS, STREAM, PATHS, SOURCES = _build()
 
 MODELS_DIR = ROOT / "models"
 DB_PATH = PATHS.data_dir / "trinetra.db"

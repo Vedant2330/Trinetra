@@ -26,6 +26,8 @@ _DISCONNECT_STREAK = 10  # consecutive failed reads => ERROR (disconnect)
 
 
 class WebcamSource(VideoSource):
+    is_live = True          # C2: live-source flag (files: False)
+
     def __init__(self, index: int = 0) -> None:
         if index < 0:
             raise SourceError(f"invalid camera index: {index}")
@@ -92,6 +94,21 @@ class WebcamSource(VideoSource):
             self._cap.release()
             self._cap = None
         self._state = SourceState.RELEASED
+
+    def reopen(self) -> bool:
+        """C2: attempt a fresh open (release + open). Returns True when the
+        camera came back. The SESSION owns the backoff ladder; the SOURCE
+        only owns the mechanics of trying again. Raises nothing — the
+        caller decides what a failed attempt means."""
+        try:
+            if self._cap is not None:
+                self._cap.release()
+                self._cap = None
+            self._state = SourceState.IDLE
+            self.open()
+            return True
+        except SourceError:
+            return False
 
 
 def probe_webcams(max_index: int = 2) -> list[int]:

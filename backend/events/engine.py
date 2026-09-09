@@ -33,13 +33,14 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from backend.analytics.base import EventDraft, FrameContext
-from backend.core.config import EVENTS, EVIDENCE_DIR
+from backend.core.config import EVENTS, EVIDENCE_DIR, PATHS
 
 log = logging.getLogger("trinetra.events")
 
 _SEVERITY_ORDER = ("INFO", "LOW", "MEDIUM", "HIGH")
 _SYSTEM_TYPES = frozenset({
-    "SOURCE_CONNECTED", "SOURCE_LOST", "SESSION_COMPLETED"})
+    "SOURCE_CONNECTED", "SOURCE_LOST", "SOURCE_RECONNECTED",
+    "SESSION_COMPLETED"})
 _DETECT_TYPES = {
     "person": "PERSON_DETECTED", "vehicle": "VEHICLE_DETECTED",
 }
@@ -238,11 +239,22 @@ class EventEngine:
 
     def _save_snapshot(self, jpeg: bytes, metadata: dict) -> Optional[str]:
         """Write the annotated JPEG to EVIDENCE_DIR/{event_id}.jpg and
-        return the path. Failure => None (event commits snapshot-less —
-        §20 disk-low behavior, flagged by absence)."""
+        return the path. M6 C12 disk-low gate: EVIDENCE_DIR.mkdir FIRST,
+        then shutil.disk_usage — below paths.min_free_mb the snapshot is
+        SKIPPED per-event (flagged snapshot_skipped_low_disk in
+        metadata; the event still commits). Write failure => None
+        (same flag class as §20 disk-low behavior)."""
+        import shutil
         event_id = metadata["_id"]
         try:
-            EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+            EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)   # gate order:
+            free_mb = shutil.disk_usage(EVIDENCE_DIR).free / (1024 * 1024)
+            if free_mb < PATHS.min_free_mb:
+                log.warning("disk low (%.0f MB free < %d) — snapshot "
+                            "skipped, event commits", free_mb,
+                            PATHS.min_free_mb)
+                metadata["snapshot_skipped_low_disk"] = True
+                return None
             p = EVIDENCE_DIR / f"{event_id}.jpg"
             p.write_bytes(jpeg)
             return str(p)

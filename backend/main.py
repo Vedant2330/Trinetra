@@ -24,6 +24,7 @@ from backend.api import events as events_api
 from backend.api import evidence as evidence_api
 from backend.api import stream as stream_api
 from backend.api import zones as zones_api
+from backend.core import config as cfg
 from backend.core.config import DEVICE, MODELS_DIR, PATHS, STREAM, VISION
 from backend.core.errors import install as api_install
 from backend.db import DAO, Database
@@ -38,6 +39,7 @@ from backend.services import (
     stop_active_session,
 )
 from backend.services.session import get_writer, set_writer
+from backend.vision import DetectorError
 
 log = logging.getLogger("trinetra.main")
 
@@ -63,10 +65,10 @@ class StartRequest(BaseModel):
 
 
 def _model_status() -> dict:
-    target = MODELS_DIR / VISION.model
+    target = cfg.MODELS_DIR / cfg.VISION.model
     return {
         "detector": {
-            "file": VISION.model,
+            "file": cfg.VISION.model,
             "present": target.exists(),
             "size_mb": round(target.stat().st_size / 1e6, 1)
             if target.exists() else None,
@@ -76,6 +78,10 @@ def _model_status() -> dict:
 
 @app.get("/api/health")
 def health() -> dict:
+    """C7 model-missing shape: ok:False + detector.present:False when the
+    weights file is absent; sessions are blocked with a clear message
+    (503) but the SERVER stays up — restoring the file recovers the NEXT
+    session start WITHOUT a restart (per-session load is the design)."""
     dao = None
     try:
         from backend.core.errors import get_dao
@@ -84,14 +90,18 @@ def health() -> dict:
     except Exception:
         db = {"ok": False}
     session = get_active_session()
+    detector = _model_status()["detector"]
+    writer = get_writer()
     return {
-        "ok": True,
+        "ok": bool(detector["present"]),   # model missing => RED
         "app": "TRINETRA",
-        "phase": "M5",
+        "phase": "M6",
         "uptime_s": round(time.time() - _STARTED, 1),
         "device_policy": DEVICE.policy,
-        "models": _model_status(),
+        "models": {"detector": detector},
         "db": db,
+        "writer": writer.health() if writer is not None
+        else {"writer": "stopped"},
         "active_session": session.source_id if session is not None else None,
     }
 
@@ -102,6 +112,13 @@ def session_start(req: StartRequest) -> dict:
     (SQLite zones, DAO, writer, hub) — sessions see real zones, events
     persist, SSE publishes, sessions/tracks rows are written."""
     from backend.core.errors import get_zone_store, get_dao, get_hub
+    if not (cfg.MODELS_DIR / cfg.VISION.model).exists():
+        raise HTTPException(
+            status_code=503,
+            detail=f"detector model missing: "
+                   f"{cfg.MODELS_DIR / cfg.VISION.model} "
+                   f"— restore the file (health is RED); no server restart "
+                   f"is needed, the next session start will load it")
     try:
         source = make_source(req.model_dump())
         session = start_session(
@@ -115,6 +132,13 @@ def session_start(req: StartRequest) -> dict:
         if "one active session" in str(e):
             raise HTTPException(status_code=409, detail=str(e)) from e
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except DetectorError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except HTTPException:
+        # §20 DB-closed row: errors.py get_dao()/get_zone_store() raise
+        # a CLEAN 503 (lifespan never ran / DB unavailable) — re-raise
+        # verbatim, never re-wrapped as 400 by the generic handler.
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"status": "ok", "session": session.status_payload()}

@@ -64,21 +64,42 @@ class Database:
         self._local = threading.local()
         self._all_conns_lock = threading.Lock()
         self._all_conns: list[sqlite3.Connection] = []
+        self._conn_owners: dict[int, threading.Thread] = {}
         if self.path != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    # ---- per-thread connections (C3) ----
+    # ---- per-thread connections (C3) + dead-thread reaping (M6 churn) ----
 
     def conn(self) -> sqlite3.Connection:
         c = getattr(self._local, "conn", None)
         if c is None:
+            self._reap_dead()            # churn guard: reap dead threads
             c = sqlite3.connect(str(self.path), timeout=5.0)
             c.row_factory = sqlite3.Row
             apply_pragmas(c)
             self._local.conn = c
             with self._all_conns_lock:
                 self._all_conns.append(c)
+                self._conn_owners[id(c)] = threading.current_thread()
         return c
+
+    def _reap_dead(self) -> None:
+        """Close connections whose owning thread has DIED. Session
+        threads are per-session; without this, 10 sessions leak ~30 fds
+        (db + wal + shm per connection). Called on every new-connection
+        creation (cheap: no locks held during close)."""
+        with self._all_conns_lock:
+            dead_conns = [c for c, t in zip(self._all_conns,
+                                            (self._conn_owners.get(id(c))
+                                             for c in self._all_conns))
+                          if t is not None and not t.is_alive()]
+            for c in dead_conns:
+                try:
+                    c.close()
+                except sqlite3.Error:
+                    pass
+                self._all_conns.remove(c)
+                self._conn_owners.pop(id(c), None)
 
     def close(self) -> None:
         c = getattr(self._local, "conn", None)
@@ -97,6 +118,7 @@ class Database:
                 except sqlite3.Error:
                     pass
             self._all_conns.clear()
+            self._conn_owners.clear()
 
     # ---- migrations (§14: numbered SQL, user_version pragma) ----
 

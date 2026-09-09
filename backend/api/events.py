@@ -44,6 +44,18 @@ def _row_to_json(row) -> dict:
 def query_events(session_id: str = "", type: str = "", severity: str = "",
                  limit: int = 100, before: str = "",
                  before_id: str = "") -> dict:
+    """A6 keyset cursor (C8): the cursor is the PAIR (before, before_id)
+    — a row's (ts, id). ts collisions are real (multiple events in one
+    ms; uuid4 ids give the total order), so EITHER half alone silently
+    loses data (DAO skips same-ts rows on a lone `before`; ignores a
+    lone `before_id`). The API therefore 400s on a HALF cursor — both
+    directions — rather than serving a lie."""
+    if bool(before) != bool(before_id):
+        missing = "before_id" if before else "before"
+        raise HTTPException(
+            400, f"pagination cursor is the pair (before, before_id) — "
+                 f"got only 'before'{'_id' if before else ''}; pass "
+                 f"'{missing}' too (the previous page's last row has both)")
     dao = get_dao()
     rows = dao.query_events(session_id=session_id or None,
                             type_=type or None, severity=severity or None,
