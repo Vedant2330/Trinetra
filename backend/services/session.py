@@ -6,7 +6,12 @@ Ownership (frozen architecture, one active session):
 
 Execution model: a single daemon thread runs the synchronous loop:
 
-    read -> detect+track -> state -> annotate(copy) -> JPEG -> slot.publish
+    read -> detect+track -> state -> FrameContext -> analytics chain
+        -> annotate(copy) -> JPEG -> slot.publish
+
+No new threads/locks in M4 — the chain runs inline on the session thread
+(§3 step 6). Drafts are collected into a bounded list (_MAX_DRAFTS,
+drop-oldest) surfaced via status_payload (drafts_count, per-zone counts).
 
 The FastAPI event loop never blocks on inference. MJPEG endpoints only
 READ the slot — many readers, ONE processing loop, zero per-client inference.
@@ -35,6 +40,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from backend.analytics import FenceAnalytic, FrameContext, ZoneStore
 from backend.core.config import STREAM, VISION
 from backend.services.frame_slot import LatestFrameSlot
 from backend.sources import FileSource, SourceError, VideoSource, WebcamSource
@@ -46,6 +52,8 @@ log = logging.getLogger("trinetra.session")
 
 _FPS_WINDOW = 30          # rolling window for pipeline FPS (documented metric)
 _MAX_CONSECUTIVE_READ_FAILS = 60   # ~3s at 20fps -> abort (webcam gone)
+_IS_NIGHT_LUMA = 40.0     # §3 step 3: is_night = mean-gray < 40 (named constant)
+_MAX_DRAFTS = 500         # bounded session draft list; drop-oldest (M4)
 
 
 class SessionError(Exception):
@@ -60,6 +68,10 @@ class ProcessingSession:
         self._detector = DetectorTracker()          # policy from config (auto)
         self._store = TrackStore()
         self._slot = LatestFrameSlot()
+        self._zones = ZoneStore()                   # M4 in-memory seam (M5 -> SQLite)
+        self._analytics = [FenceAnalytic(self._zones)]   # MVP chain: one module (§11)
+        self._analytics[0].reset(source.source_id)
+        self.event_drafts: list[dict] = []          # bounded, drop-oldest
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._started_at = time.time()
@@ -83,6 +95,11 @@ class ProcessingSession:
     @property
     def slot(self) -> LatestFrameSlot:
         return self._slot
+
+    @property
+    def zones(self) -> ZoneStore:
+        """Zone CRUD surface (M5 REST); validated geometry, §12 space."""
+        return self._zones
 
     # ---- lifecycle ----
 
@@ -147,6 +164,32 @@ class ProcessingSession:
                 objects = self._detector.process(pkt.frame)
                 self._store.update(objects, tick=tick, wall_ts=pkt.wall_ts)
 
+                # FrameContext (§3 step 3): luminance = mean gray via cv2,
+                # is_night = luminance < _IS_NIGHT_LUMA (named constant).
+                h, w = pkt.frame.shape[:2]
+                gray = cv2.cvtColor(pkt.frame, cv2.COLOR_BGR2GRAY)
+                luminance = float(gray.mean())
+                ctx = FrameContext(
+                    tick=tick, wall_ts=pkt.wall_ts, video_ts=pkt.video_ts,
+                    luminance=luminance, is_night=luminance < _IS_NIGHT_LUMA,
+                    shape=(w, h))
+
+                # analytics chain (§3 step 6): read-only view over the store
+                view = self._store.view()
+                for module in self._analytics:
+                    for draft in module.process(ctx, view):
+                        self.event_drafts.append({
+                            "type": draft.type,
+                            "track_ids": draft.track_ids,
+                            "zone_id": draft.zone_id,
+                            "direction": draft.direction,
+                            "confidence": draft.confidence,
+                            "metadata": draft.metadata,
+                            "wall_ts": pkt.wall_ts,
+                        })
+                        if len(self.event_drafts) > _MAX_DRAFTS:
+                            self.event_drafts.pop(0)   # bounded, drop-oldest
+
                 annotated = annotate(
                     pkt.frame, objects,
                     pipeline_fps=self.pipeline_fps if self.pipeline_fps > 0 else None,
@@ -177,6 +220,7 @@ class ProcessingSession:
     # ---- status ----
 
     def status_payload(self) -> dict:
+        fence = self._analytics[0] if self._analytics else None
         return {
             "source_id": self.source_id,
             "status": self.status,
@@ -185,6 +229,8 @@ class ProcessingSession:
             "pipeline_fps": round(self.pipeline_fps, 1),
             "active_tracks": self._store.count_active(),
             "total_tracks": len(self._store.tracks),
+            "drafts_count": len(self.event_drafts),
+            "zone_person_counts": fence.zone_person_counts() if fence else {},
             "error": self.error or None,
             "uptime_s": round(time.time() - self._started_at, 1),
         }

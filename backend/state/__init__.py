@@ -4,6 +4,6 @@ ByteTrack is the object-identity authority. TrackStore NEVER assigns,
 generates, or substitutes IDs — it only records what the detector produced.
 """
 
-from backend.state.tracks import TrackState, TrackStore
+from backend.state.tracks import TrackState, TrackStore, TrackView
 
-__all__ = ["TrackState", "TrackStore"]
+__all__ = ["TrackState", "TrackStore", "TrackView"]
