@@ -34,10 +34,11 @@ class TrackState:
 
     __slots__ = ("track_id", "class_id", "class_name", "first_tick", "first_seen",
                  "last_tick", "last_seen", "last_bbox", "frames_seen",
-                 "positions", "active")
+                 "positions", "active", "last_conf", "max_conf", "_confirmed_fired")
 
     def __init__(self, track_id: int, class_id: int, class_name: str,
-                 tick: int, wall_ts: float, bbox: list[float]) -> None:
+                 tick: int, wall_ts: float, bbox: list[float],
+                 confidence: float = 0.0) -> None:
         self.track_id = track_id
         self.class_id = class_id
         self.class_name = class_name
@@ -51,6 +52,12 @@ class TrackState:
             maxlen=TRACKING.history_len)
         self._push_position(bbox, tick)
         self.active = True
+        # C5: conf tracking — last + max (§14 tracks flush needs max_conf;
+        # PERSON/VEHICLE_DETECTED confidence = max det conf among
+        # confirming frames)
+        self.last_conf = float(confidence)
+        self.max_conf = float(confidence)
+        self._confirmed_fired = False      # once-per-track structural gate
 
     def _push_position(self, bbox: list[float], tick: int) -> None:
         # FOOT point (cx, y2) — §7 FROZEN (M4): ground-contact point for
@@ -60,7 +67,8 @@ class TrackState:
         self.positions.append((x, y, tick))
 
     def update(self, tick: int, wall_ts: float, bbox: list[float],
-               class_name: str, class_id: int) -> None:
+                class_name: str, class_id: int,
+                confidence: float = 0.0) -> None:
         self.last_tick = tick
         self.last_seen = wall_ts
         self.last_bbox = list(bbox)
@@ -69,6 +77,18 @@ class TrackState:
         self.frames_seen += 1
         self._push_position(bbox, tick)
         self.active = True
+        self.last_conf = float(confidence)          # C5
+        if float(confidence) > self.max_conf:
+            self.max_conf = float(confidence)
+
+    # ---- confirmation seam (M5, god's decision) ----
+
+    @property
+    def confirmed(self) -> bool:
+        """frames_seen >= TRACKING.min_confirm_frames (structural,
+        once-per-session — _confirmed_fired guards the once-per-track
+        event edge)."""
+        return self.frames_seen >= TRACKING.min_confirm_frames
 
     @property
     def position(self) -> tuple[float, float]:
@@ -150,6 +170,22 @@ class TrackStore:
     def tick(self) -> int:
         return self._tick
 
+    # ---- M5: confirmation edge helper (PERSON/VEHICLE_DETECTED seam) ----
+
+    def take_newly_confirmed(self) -> list[TrackState]:
+        """Tracks that JUST crossed min_confirm_frames THIS update and
+        whose once-per-track edge has not fired yet. Structural dedup
+        (A2): PERSON/VEHICLE_DETECTED come from here, NOT the cooldown
+        map. Each call consumes the edge — a track is returned exactly
+        once per session (C8: a fresh store per session resets it)."""
+        out: list[TrackState] = []
+        for t in self._tracks.values():
+            if t._confirmed_fired or not t.confirmed:
+                continue
+            t._confirmed_fired = True
+            out.append(t)
+        return out
+
     # ---- queries ----
 
     def get(self, track_id: int) -> Optional[TrackState]:
@@ -193,9 +229,10 @@ class TrackStore:
             if state is None:
                 self._tracks[obj.track_id] = TrackState(
                     obj.track_id, obj.class_id, obj.class_name,
-                    tick, wall_ts, obj.bbox)
+                    tick, wall_ts, obj.bbox, obj.confidence)
             else:
-                state.update(tick, wall_ts, obj.bbox, obj.class_name, obj.class_id)
+                state.update(tick, wall_ts, obj.bbox, obj.class_name,
+                             obj.class_id, obj.confidence)
             updates += 1
         # lost detection
         for state in self._tracks.values():

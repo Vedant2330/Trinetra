@@ -1,32 +1,34 @@
-"""TRINETRA processing session — the one and only processing loop (M3).
+"""TRINETRA processing session — the one and only processing loop (M5).
 
 Ownership (frozen architecture, one active session):
     ProcessingSession owns: VideoSource, DetectorTracker, TrackStore,
     one processing thread, one LatestFrameSlot. Nothing else does inference.
 
-Execution model: a single daemon thread runs the synchronous loop:
+    M5: the session RECEIVES the app-scoped ZoneStore (SQLite-backed,
+    C1), the EventWriter, the SseHub, and the DAO (for the sessions row
+    lifecycle C4). The EventEngine (per-session, C8) is created here.
+
+Execution model: a single daemon thread runs the synchronous loop (§3):
 
     read -> detect+track -> state -> FrameContext -> analytics chain
-        -> annotate(copy) -> JPEG -> slot.publish
+        -> annotate(copy) -> JPEG -> engine.commit(drafts, SAME jpeg)
+        -> slot.publish
 
-No new threads/locks in M4 — the chain runs inline on the session thread
-(§3 step 6). Drafts are collected into a bounded list (_MAX_DRAFTS,
-drop-oldest) surfaced via status_payload (drafts_count, per-zone counts).
+    §3 ordering: annotate BEFORE commit — event snapshots are the SAME
+    annotated JPEG the operator sees (A1: one render, no re-encode).
+    PERSON/VEHICLE_DETECTED drafts come from take_newly_confirmed()
+    (structural once-per-track, A2) — NOT the cooldown map.
 
-The FastAPI event loop never blocks on inference. MJPEG endpoints only
-READ the slot — many readers, ONE processing loop, zero per-client inference.
+Source lifecycle (A5): SOURCE_CONNECTED draft after open + FIRST
+successful read (emitted in-loop, not at start()); SOURCE_LOST draft
+on read-fail abort, BEFORE status=error. System events: jpeg=None (A1).
 
-Warm-up (verified safe — see tests/test_m3_session.py):
-    model.predict(noise) once at session start. This warms the MPS/CIW graph
-    WITHOUT touching ByteTrack: predict() bypasses the tracker entirely, so
-    tracking state begins on the first real frame (identical ID sequences
-    proven vs a cold tracker). A track()-based warm-up was investigated and
-    REJECTED: it loses the first frame's detections (measured evidence).
-
-EOF (files): loop ends, session status=completed, last annotated JPEG stays
-served via the slot's non-consuming peek until the next session publishes.
-Metrics: pipeline FPS = rolling mean of (loop start -> JPEG published);
-displayed FPS uses the same numbers — one source of truth.
+EOF finalize (A6, pinned order):
+    flush tracks -> DB  ->  SESSION_COMPLETED commit  ->  writer drain
+    ->  status=completed   (drain MUST precede the status flip)
+    Stop path: same finalize in `finally` for completed/stopped/error
+    (error = best-effort flush, honest partial). Writer is catch-all
+    (A6): a DB error kills neither the writer thread nor the session.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -41,9 +44,13 @@ import cv2
 import numpy as np
 
 from backend.analytics import FenceAnalytic, FrameContext, ZoneStore
-from backend.core.config import STREAM, VISION
+from backend.analytics.base import EventDraft
+from backend.core.config import STREAM, TRACKING, VISION
+from backend.events import EventEngine, SseHub
+from backend.db.dao import DAO
+from backend.db.writer import EventWriter
 from backend.services.frame_slot import LatestFrameSlot
-from backend.sources import FileSource, SourceError, VideoSource, WebcamSource
+from backend.sources import FileSource, SourceError, SourceState, VideoSource, WebcamSource
 from backend.state import TrackStore
 from backend.vision import DetectorError, DetectorTracker
 from backend.vision.annotation import annotate
@@ -53,25 +60,46 @@ log = logging.getLogger("trinetra.session")
 _FPS_WINDOW = 30          # rolling window for pipeline FPS (documented metric)
 _MAX_CONSECUTIVE_READ_FAILS = 60   # ~3s at 20fps -> abort (webcam gone)
 _IS_NIGHT_LUMA = 40.0     # §3 step 3: is_night = mean-gray < 40 (named constant)
-_MAX_DRAFTS = 500         # bounded session draft list; drop-oldest (M4)
+
+_VEHICLE_CLASSES = frozenset(
+    {"bicycle", "car", "motorcycle", "bus", "truck"})
 
 
 class SessionError(Exception):
     """Invalid session request or lifecycle misuse."""
 
 
+def _sys_draft(type_: str) -> EventDraft:
+    """System draft (§13): SOURCE_*/SESSION_COMPLETED — INFO severity,
+    no tracks, no zone, no snapshot (A1: jpeg=None)."""
+    return EventDraft(
+        type=type_, track_ids=[], zone_id=None, direction=None,
+        confidence=1.0, metadata={"is_night": False, "system": True})
+
+
 class ProcessingSession:
     """One active processing session. Create via start(); stop() to end."""
 
-    def __init__(self, source: VideoSource) -> None:
+    def __init__(self, source: VideoSource,
+                 zones: Optional[ZoneStore] = None,
+                 dao: Optional[DAO] = None,
+                 writer: Optional[EventWriter] = None,
+                 hub: Optional[SseHub] = None) -> None:
         self._source = source
         self._detector = DetectorTracker()          # policy from config (auto)
         self._store = TrackStore()
         self._slot = LatestFrameSlot()
-        self._zones = ZoneStore()                   # M4 in-memory seam (M5 -> SQLite)
-        self._analytics = [FenceAnalytic(self._zones)]   # MVP chain: one module (§11)
+        # C1: app-scoped SQLite-backed store RECEIVED from the app; the
+        # M4 in-memory fallback only when no app context (unit tests).
+        self._zones = zones if zones is not None else ZoneStore()
+        self._dao = dao
+        self._writer = writer
+        self._hub = hub
+        self._analytics = [FenceAnalytic(self._zones)]   # MVP chain (§11)
         self._analytics[0].reset(source.source_id)
-        self.event_drafts: list[dict] = []          # bounded, drop-oldest
+        # C4/C8: session row id + per-session engine state
+        self._session_row_id: Optional[str] = None
+        self._engine: Optional[EventEngine] = None
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._started_at = time.time()
@@ -81,6 +109,8 @@ class ProcessingSession:
         self.error: str = ""
         self.status: str = "starting"               # starting|running|completed|error|stopped
         self._durations: list[float] = []
+        self._connected_emitted = False
+        self._finalized = False
 
     # ---- properties ----
 
@@ -98,8 +128,16 @@ class ProcessingSession:
 
     @property
     def zones(self) -> ZoneStore:
-        """Zone CRUD surface (M5 REST); validated geometry, §12 space."""
+        """Zone CRUD surface (C1: works with no active session too)."""
         return self._zones
+
+    @property
+    def engine(self) -> Optional[EventEngine]:
+        return self._engine
+
+    @property
+    def events_committed(self) -> int:
+        return self._engine.committed if self._engine else 0
 
     # ---- lifecycle ----
 
@@ -119,6 +157,16 @@ class ProcessingSession:
             self.status = "error"
             self.error = str(e)
             raise
+        # C4: sessions row INSERT + sources row UPSERT (FK targets)
+        if self._dao is not None:
+            src_type = "webcam" if "webcam" in self.source_id else "file"
+            self._dao.upsert_source(self.source_id, src_type)
+            self._session_row_id = self._dao.insert_session(self.source_id)
+        # C8: per-session engine (cooldown map + counter cleared)
+        self._engine = EventEngine(
+            self.source_id,
+            self._session_row_id or f"nosession:{id(self)}",
+            writer=self._writer, hub=self._hub, dao=self._dao)
         self._warmup()
         self._thread = threading.Thread(target=self._run, name="trinetra-session", daemon=True)
         self._thread.start()
@@ -130,6 +178,7 @@ class ProcessingSession:
         self._source.release()
         if self.status in ("running", "starting"):
             self.status = "stopped"
+        self._finalize()        # A6: stop path finalize
 
     # ---- internals ----
 
@@ -142,6 +191,22 @@ class ProcessingSession:
             self._detector.warmup(noise)
         except DetectorError:
             log.warning("warm-up inference failed; continuing cold")
+
+    def _annotate(self, frame: np.ndarray, objects: list) -> np.ndarray:
+        """§3 step 7: annotate a COPY with tracks + metrics. Zone overlay
+        is drawn by the hub-bound client (M7 UI canvas) — the MVP
+        annotated frame carries bboxes + HUD only (frozen M3 annotator
+        surface; zone overlay on the stream is M7 polish)."""
+        return annotate(
+            frame, objects,
+            pipeline_fps=self.pipeline_fps if self.pipeline_fps > 0 else None,
+            device=self._detector.actual_device,
+        )
+
+    def _commit(self, drafts: list[EventDraft], jpeg: Optional[bytes],
+               ctx: FrameContext) -> None:
+        if self._engine is not None:
+            self._engine.commit(drafts, jpeg, ctx)
 
     def _run(self) -> None:
         self.status = "running"
@@ -157,9 +222,21 @@ class ProcessingSession:
                         break
                     read_fails += 1
                     if read_fails >= _MAX_CONSECUTIVE_READ_FAILS:
-                        raise RuntimeError("source read failed repeatedly (device gone?)")
+                        # A5: SOURCE_LOST before the status flip
+                        raise RuntimeError(
+                            "source read failed repeatedly (device gone?)")
                     continue
                 read_fails = 0
+
+                # A5: SOURCE_CONNECTED after open + FIRST successful read
+                if not self._connected_emitted:
+                    self._connected_emitted = True
+                    sys_ctx = FrameContext(
+                        tick=tick, wall_ts=pkt.wall_ts,
+                        video_ts=pkt.video_ts, luminance=128.0,
+                        is_night=False, shape=(1, 1))
+                    self._commit([_sys_draft("SOURCE_CONNECTED")], None,
+                                sys_ctx)
 
                 objects = self._detector.process(pkt.frame)
                 self._store.update(objects, tick=tick, wall_ts=pkt.wall_ts)
@@ -174,34 +251,38 @@ class ProcessingSession:
                     luminance=luminance, is_night=luminance < _IS_NIGHT_LUMA,
                     shape=(w, h))
 
-                # analytics chain (§3 step 6): read-only view over the store
+                # analytics chain (§3 step 6) + confirm-edge drafts (A2)
                 view = self._store.view()
+                drafts: list[EventDraft] = []
+                for t in self._store.take_newly_confirmed():
+                    dtype = "VEHICLE_DETECTED" \
+                        if t.class_name in _VEHICLE_CLASSES \
+                        else "PERSON_DETECTED"
+                    drafts.append(EventDraft(
+                        type=dtype, track_ids=[t.track_id], zone_id=None,
+                        direction=None, confidence=t.max_conf,
+                        metadata={"is_night": ctx.is_night,
+                                  "track_class": t.class_name,
+                                  "video_ts": ctx.video_ts,
+                                  "tick": ctx.tick}))
                 for module in self._analytics:
-                    for draft in module.process(ctx, view):
-                        self.event_drafts.append({
-                            "type": draft.type,
-                            "track_ids": draft.track_ids,
-                            "zone_id": draft.zone_id,
-                            "direction": draft.direction,
-                            "confidence": draft.confidence,
-                            "metadata": draft.metadata,
-                            "wall_ts": pkt.wall_ts,
-                        })
-                        if len(self.event_drafts) > _MAX_DRAFTS:
-                            self.event_drafts.pop(0)   # bounded, drop-oldest
+                    drafts += module.process(ctx, view)
 
-                annotated = annotate(
-                    pkt.frame, objects,
-                    pipeline_fps=self.pipeline_fps if self.pipeline_fps > 0 else None,
-                    device=self._detector.actual_device,
-                )
+                # §3 step 7: annotate BEFORE commit (A1: same JPEG)
+                annotated = self._annotate(pkt.frame, objects)
                 ok, buf = cv2.imencode(
                     ".jpg", annotated,
                     [int(cv2.IMWRITE_JPEG_QUALITY), STREAM.mjpeg_quality],
                 )
                 if not ok:
                     raise RuntimeError("JPEG encoding failed")
-                self._slot.publish(bytes(buf))
+                jpeg = bytes(buf)
+
+                # §3 step 8: commit with the SAME buffer the slot gets
+                self._commit(drafts, jpeg, ctx)
+
+                # §3 step 9: publish
+                self._slot.publish(jpeg)
 
                 dt = time.perf_counter() - t0
                 self._durations.append(dt)
@@ -214,8 +295,69 @@ class ProcessingSession:
             self.status = "error"
             self.error = f"{type(e).__name__}: {e}"
             log.exception("processing loop failed")
+            # A5: SOURCE_LOST on read-fail abort (before status=error set
+            # above is already done — but the draft is emitted HERE)
+            if "read failed repeatedly" in str(e):
+                try:
+                    sys_ctx = FrameContext(
+                        tick=tick, wall_ts=time.time(), video_ts=None,
+                        luminance=128.0, is_night=False, shape=(1, 1))
+                    self._commit([_sys_draft("SOURCE_LOST")], None, sys_ctx)
+                except Exception:  # noqa: BLE001 — best effort on error path
+                    log.warning("SOURCE_LOST draft emission failed")
         finally:
             self._source.release()
+            self._finalize()
+
+    # ---- A6 finalize (pinned order) ----
+
+    def _finalize(self) -> None:
+        """flush tracks -> DB -> SESSION_COMPLETED -> writer drain ->
+        status flip. Runs exactly once (idempotent guard); error path =
+        best-effort flush (honest partial)."""
+        if self._finalized:
+            return
+        self._finalized = True
+        try:
+            if self._dao is not None and self._session_row_id is not None:
+                # 1. flush tracks -> DB (§14 aggregates)
+                rows = []
+                for t in self._store.tracks.values():
+                    rows.append((
+                        t.track_id, t.class_name,
+                        _iso(t.first_seen), _iso(t.last_seen),
+                        t.frames_seen, t.max_conf))
+                if rows:
+                    self._dao.flush_tracks(self._session_row_id, rows)
+                # 2. SESSION_COMPLETED commit (EOF path only — stopped/
+                #    error paths update the row without the system event)
+                if self.status == "completed":
+                    sys_ctx = FrameContext(
+                        tick=self.frames_processed, wall_ts=time.time(),
+                        video_ts=None, luminance=128.0, is_night=False,
+                        shape=(1, 1))
+                    self._commit([_sys_draft("SESSION_COMPLETED")], None,
+                                 sys_ctx)
+                # 3. writer drain MUST precede the status row update
+                if self._writer is not None:
+                    self._writer.drain(timeout=5.0)
+                self._dao.update_session(
+                    self._session_row_id, self.status,
+                    stats=self._stats_payload())
+            elif self._writer is not None:
+                self._writer.drain(timeout=5.0)
+        except Exception as e:  # noqa: BLE001 — finalize is best-effort
+            log.error("session finalize failed (best-effort partial): %s", e)
+
+    def _stats_payload(self) -> dict:
+        fence = self._analytics[0] if self._analytics else None
+        return {
+            "frames_processed": self.frames_processed,
+            "pipeline_fps": round(self.pipeline_fps, 1),
+            "events_committed": self.events_committed,
+            "tracks_total": len(self._store.tracks),
+            "zone_person_counts": fence.zone_person_counts() if fence else {},
+        }
 
     # ---- status ----
 
@@ -229,11 +371,25 @@ class ProcessingSession:
             "pipeline_fps": round(self.pipeline_fps, 1),
             "active_tracks": self._store.count_active(),
             "total_tracks": len(self._store.tracks),
-            "drafts_count": len(self.event_drafts),
+            "events_committed": self.events_committed,   # C9 rename
             "zone_person_counts": fence.zone_person_counts() if fence else {},
             "error": self.error or None,
             "uptime_s": round(time.time() - self._started_at, 1),
         }
+
+
+# ---- app-scoped writer holder (installed by main lifespan) ----
+
+_module_writer: Optional[EventWriter] = None
+
+
+def set_writer(writer: Optional[EventWriter]) -> None:
+    global _module_writer
+    _module_writer = writer
+
+
+def get_writer() -> Optional[EventWriter]:
+    return _module_writer
 
 
 # ---- one-active-session registry (module-level, minimal) ----
@@ -247,7 +403,11 @@ def get_active_session() -> Optional[ProcessingSession]:
         return _active
 
 
-def start_session(source: VideoSource) -> ProcessingSession:
+def start_session(source: VideoSource,
+                  zones: Optional[ZoneStore] = None,
+                  dao: Optional[DAO] = None,
+                  writer: Optional[EventWriter] = None,
+                  hub: Optional[SseHub] = None) -> ProcessingSession:
     global _active
     with _lock:
         if _active is not None and _active.status in ("running", "starting"):
@@ -255,7 +415,8 @@ def start_session(source: VideoSource) -> ProcessingSession:
                 f"one active session rule: session '{_active.source_id}' is "
                 f"{_active.status} — stop it first"
             )
-        session = ProcessingSession(source)
+        session = ProcessingSession(source, zones=zones, dao=dao,
+                                    writer=writer, hub=hub)
         session.start()
         _active = session
         return session
@@ -286,3 +447,8 @@ def make_source(spec: dict) -> VideoSource:
             raise SessionError("file session requires 'path'")
         return FileSource(path)
     raise SessionError(f"unknown source type: {stype!r} (use 'webcam' or 'file')")
+
+
+def _iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat(
+        timespec="milliseconds")
