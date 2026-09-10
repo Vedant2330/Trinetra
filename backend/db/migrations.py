@@ -99,4 +99,8 @@ MIGRATIONS: dict[int, str] = {
     ALTER TABLE sources ADD COLUMN label TEXT;
     CREATE INDEX idx_geo_sectors_active ON geo_sectors(active);
     """,
+    # Migration 3 (V3.5 / V5): Persisted track trajectories for investigation.
+    3: """
+    ALTER TABLE tracks ADD COLUMN trajectory TEXT DEFAULT NULL;
+    """,
 }

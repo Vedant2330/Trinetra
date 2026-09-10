@@ -1,11 +1,14 @@
-// Cameras — the full live view for the active camera plus the real
-// registry grid. ONE active session at a time (frozen §17): the grid
-// shows every registered camera with honest live/idle/error state;
-// the big feed shows the LIVE session's annotated stream.
+// Live View — to V3 spec: source UX (webcam scan / file upload with
+// real progress / start / stop), the big LIVE feed, a REAL stats
+// strip (status_payload session fields — people/vehicles/frames/fps/
+// device), and the working Analytics-Layers toggle bar (server-side
+// render layers, C2). Plus the honest registry grid.
 
 import CameraStatus from '../components/CameraStatus';
+import LayerToggles from '../components/LayerToggles';
 import LiveFeed from '../components/LiveFeed';
 import SourcePicker from '../components/SourcePicker';
+import { ComingSoon } from '../components/ui';
 import { EmptyState, Panel, Pill, StatusDot } from '../components/ui';
 import type { Store } from '../store';
 
@@ -14,9 +17,44 @@ export default function Cameras({ store }: { store: Store }) {
   const s = status.session;
 
   return (
-    <div className="h-full min-h-0 grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-1.5">
-      <div className="grid grid-rows-[minmax(0,1.35fr)_minmax(0,1fr)] gap-1.5 min-h-0">
+    <div className="h-full min-h-0 grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-2">
+      <div className="grid grid-rows-[auto_minmax(0,1.6fr)_minmax(0,1fr)] gap-2 min-h-0">
+        {/* REAL stats strip — every number from status_payload */}
+        <Panel title="Session Stats" className="min-h-0">
+          <div className="grid grid-cols-7 gap-1.5 p-2">
+            <Stat label="People" value={s ? String(s.people_detected) : '—'} live={!!s && s.people_detected > 0} />
+            <Stat label="Vehicles" value={s ? String(s.vehicles_detected) : '—'} live={!!s && s.vehicles_detected > 0} />
+            <Stat label="Active Tracks" value={s ? String(s.active_tracks) : '—'} />
+            <Stat label="Frames" value={s ? String(s.frames_processed) : '—'} />
+            <Stat label="Pipeline FPS" value={s ? s.pipeline_fps.toFixed(1) : '—'} />
+            <Stat label="Device" value={s ? s.device.toUpperCase() : '—'} />
+            <Stat label="Uptime" value={s ? `${Math.round(s.uptime_s)}s` : '—'} />
+          </div>
+        </Panel>
+
         <LiveFeed store={store} />
+
+        {/* analytics layers — VERIFIABLY change the rendered stream */}
+        <Panel
+          title="Analytics Layers"
+          right={<Pill tone="dim">server-side render layers</Pill>}
+          className="min-h-0"
+        >
+          <div className="p-2 flex flex-wrap gap-2 items-center">
+            <LayerToggles store={store} />
+            {/* honest roadmap — every item disabled + labeled */}
+            <span className="text-[9px] font-mono text-cc-dim/70 ml-1">roadmap — not in this build:</span>
+            <ComingSoon label="Pose Estimation" />
+            <ComingSoon label="Thermal Fusion" />
+            <ComingSoon label="Advanced Behavior" />
+          </div>
+        </Panel>
+      </div>
+
+      <div className="grid grid-rows-[auto_auto_minmax(0,1fr)] gap-2 min-h-0">
+        <SourcePicker store={store} />
+        <CameraStatus store={store} />
+
         {/* camera grid — one tile per REAL source row */}
         <Panel
           title="Camera Grid — registered sources"
@@ -26,7 +64,7 @@ export default function Cameras({ store }: { store: Store }) {
         >
           {cameras.length === 0
             ? <EmptyState>no cameras registered — a source row is created when a session starts</EmptyState>
-            : <div className="grid grid-cols-2 lg:grid-cols-3 gap-1.5 p-1.5">
+            : <div className="grid grid-cols-2 gap-1.5 p-1.5">
                 {cameras.map(c => {
                   const live = c.status === 'live';
                   const sel = selectedCamera === c.camera_id;
@@ -34,7 +72,7 @@ export default function Cameras({ store }: { store: Store }) {
                     <button
                       key={c.camera_id}
                       onClick={() => store.selectCamera(sel ? null : c.camera_id)}
-                      className={`border rounded p-2 text-left transition-colors ${
+                      className={`border rounded-lg p-2 text-left transition-colors ${
                         sel ? 'border-cc-blue bg-cc-panel2' : 'border-cc-line hover:bg-cc-panel2/60'
                       }`}
                     >
@@ -78,9 +116,16 @@ export default function Cameras({ store }: { store: Store }) {
               </div>}
         </Panel>
       </div>
-      <div className="grid grid-rows-[auto_minmax(0,1fr)] gap-1.5 min-h-0">
-        <SourcePicker store={store} />
-        <CameraStatus store={store} />
+    </div>
+  );
+}
+
+function Stat({ label, value, live }: { label: string; value: string; live?: boolean }) {
+  return (
+    <div className="bg-cc-panel2 border border-cc-line rounded-lg px-2 py-1.5 min-w-0">
+      <div className="text-[9px] uppercase tracking-wider text-cc-dim truncate">{label}</div>
+      <div className={`font-mono text-base leading-tight truncate ${live ? 'text-cc-blue font-semibold' : 'text-cc-text'}`}>
+        {value}
       </div>
     </div>
   );

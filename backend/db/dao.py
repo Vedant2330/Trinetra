@@ -97,23 +97,67 @@ class DAO:
         return self.conn.execute(
             "SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
 
-    # ---- tracks (flush-at-end aggregates, §14) ----
+    # ---- tracks (flush-at-end aggregates, §14, V5 trajectory persistence) ----
+
+    def _has_trajectory_column(self) -> bool:
+        """Check if tracks table has trajectory column (Migration 3)."""
+        try:
+            names = {r[1] for r in self.conn.execute("PRAGMA table_info(tracks)").fetchall()}
+            return "trajectory" in names
+        except Exception:
+            return False
+
+    def upsert_track_trajectories(self, session_id: str,
+                                  trajectories: list[tuple[int, str]]) -> None:
+        """Persist serialized trajectory JSON for track IDs in session."""
+        if not trajectories or not self._has_trajectory_column():
+            return
+        self.conn.executemany(
+            """
+            UPDATE tracks SET trajectory=?
+            WHERE session_id=? AND track_id=?
+            """,
+            [(traj_json, session_id, tid) for tid, traj_json in trajectories])
+        self.conn.commit()
 
     def flush_tracks(self, session_id: str, rows: list[tuple]) -> None:
         """Bulk upsert of (track_id, class_name, first_seen, last_seen,
-        frames, max_conf) aggregates for one session."""
-        self.conn.executemany(
-            """
-            INSERT INTO tracks(session_id, track_id, class_name,
-                               first_seen, last_seen, frames, max_conf)
-            VALUES(?,?,?,?,?,?,?)
-            ON CONFLICT(session_id, track_id) DO UPDATE SET
-              last_seen=excluded.last_seen,
-              frames=excluded.frames,
-              max_conf=excluded.max_conf
-            """,
-            [(session_id, *r) for r in rows])
+        frames, max_conf[, trajectory]) aggregates for one session."""
+        if not rows:
+            return
+        has_traj = self._has_trajectory_column()
+        if has_traj and len(rows[0]) >= 7:
+            self.conn.executemany(
+                """
+                INSERT INTO tracks(session_id, track_id, class_name,
+                                   first_seen, last_seen, frames, max_conf, trajectory)
+                VALUES(?,?,?,?,?,?,?,?)
+                ON CONFLICT(session_id, track_id) DO UPDATE SET
+                  last_seen=excluded.last_seen,
+                  frames=excluded.frames,
+                  max_conf=excluded.max_conf,
+                  trajectory=COALESCE(excluded.trajectory, tracks.trajectory)
+                """,
+                [(session_id, *r[:7]) for r in rows])
+        else:
+            self.conn.executemany(
+                """
+                INSERT INTO tracks(session_id, track_id, class_name,
+                                   first_seen, last_seen, frames, max_conf)
+                VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(session_id, track_id) DO UPDATE SET
+                  last_seen=excluded.last_seen,
+                  frames=excluded.frames,
+                  max_conf=excluded.max_conf
+                """,
+                [(session_id, *r[:6]) for r in rows])
         self.conn.commit()
+
+    def get_tracks(self, session_id: str) -> list[sqlite3.Row]:
+        """Fetch all track rows for a session ordered by track_id."""
+        return self.conn.execute(
+            "SELECT * FROM tracks WHERE session_id=? ORDER BY track_id",
+            (session_id,)).fetchall()
 
     # ---- zones CRUD (C1/C2/C12: app-scoped, deterministic order) ----
 

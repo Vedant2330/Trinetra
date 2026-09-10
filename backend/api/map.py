@@ -119,6 +119,10 @@ def set_camera_geo(source_id: str, req: CameraGeo) -> dict:
     """Attach real coordinates to a known camera (source row). 404 when
     the camera has never been seen (no source row); 503 when the geo
     migration has not been applied."""
+    if not (-90 <= req.latitude <= 90 and -180 <= req.longitude <= 180):
+        raise HTTPException(400, f"invalid coordinates "
+                                 f"({req.latitude}, {req.longitude}) — "
+                                 f"latitude -90..90, longitude -180..180")
     dao = get_dao()
     if dao.get_source(source_id) is None:
         raise HTTPException(404, f"camera {source_id} unknown — start a "

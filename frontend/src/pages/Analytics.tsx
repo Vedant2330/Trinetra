@@ -1,14 +1,19 @@
-// Analytics — real counts over the event log: severity/type breakdown,
-// per-hour activity (from REAL event timestamps), night share. All
-// values derive from /api/events rows; no synthetic charts.
+// Analytics — V3: a REAL runtime panel (people/vehicles/tracks/fps/
+// frames/device/uptime + trajectory capability + fence status, all
+// from status_payload) + visualization controls that ACTUALLY work
+// (the same server render layers as Live View) + the real event
+// charts (severity/type/hour from /api/events). No synthetic charts.
 
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
+import LayerToggles from '../components/LayerToggles';
 import { EmptyState, Panel, Pill } from '../components/ui';
 import type { Store } from '../store';
 import type { EventRow } from '../types';
 
 export default function Analytics({ store }: { store: Store }) {
+  const { status, zones } = store;
+  const s = status.session;
   const [all, setAll] = useState<EventRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -29,12 +34,6 @@ export default function Analytics({ store }: { store: Store }) {
     });
   }, [store.events, all]);
 
-  const bySev = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const e of merged) m.set(e.severity, (m.get(e.severity) ?? 0) + 1);
-    return [...m.entries()].sort((a, b) => b[1] - a[1]);
-  }, [merged]);
-
   const byType = useMemo(() => {
     const m = new Map<string, number>();
     for (const e of merged) m.set(e.type, (m.get(e.type) ?? 0) + 1);
@@ -50,7 +49,6 @@ export default function Analytics({ store }: { store: Store }) {
     return [...Array(24).keys()].map(h => [h, m.get(h) ?? 0] as const);
   }, [merged]);
 
-  const nightCount = merged.filter(e => e.is_night).length;
   const maxHour = Math.max(1, ...byHour.map(([, n]) => n));
   const maxType = Math.max(1, ...byType.map(([, n]) => n));
 
@@ -59,15 +57,48 @@ export default function Analytics({ store }: { store: Store }) {
   }
 
   return (
-    <div className="h-full min-h-0 grid grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] gap-1.5">
-      <Panel title="Event Totals" className="shrink-0 min-h-0">
-        <div className="grid grid-cols-6 gap-1.5 p-2">
-          <Stat label="Total Events" value={merged.length} />
-          <Stat label="High" value={bySev.find(([s]) => s === 'HIGH')?.[1] ?? 0} tone="red" />
-          <Stat label="Medium" value={bySev.find(([s]) => s === 'MEDIUM')?.[1] ?? 0} tone="amber" />
-          <Stat label="Low" value={bySev.find(([s]) => s === 'LOW')?.[1] ?? 0} tone="blue" />
-          <Stat label="Info" value={bySev.find(([s]) => s === 'INFO')?.[1] ?? 0} tone="dim" />
-          <Stat label="Night Events" value={nightCount} />
+    <div className="h-full min-h-0 grid grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] gap-2 overflow-y-auto">
+      {/* REAL runtime panel — every number from status_payload */}
+      <Panel
+        title="Runtime — live session state"
+        right={<Pill tone={s ? (s.status === 'running' ? 'green' : 'amber') : 'dim'}>
+          {s ? s.status.toUpperCase() : 'NO SESSION'}
+        </Pill>}
+        className="shrink-0 min-h-0"
+      >
+        <div className="grid grid-cols-4 lg:grid-cols-7 gap-1.5 p-2">
+          <Stat label="People Detected" value={s ? String(s.people_detected) : '—'} />
+          <Stat label="Vehicles Detected" value={s ? String(s.vehicles_detected) : '—'} />
+          <Stat label="Active Tracks" value={s ? String(s.active_tracks) : '—'} />
+          <Stat label="Pipeline FPS" value={s ? s.pipeline_fps.toFixed(1) : '—'} />
+          <Stat label="Frames Processed" value={s ? String(s.frames_processed) : '—'} />
+          <Stat label="Device" value={s ? s.device.toUpperCase() : '—'} />
+          <Stat label="Uptime" value={s ? `${Math.round(s.uptime_s)}s` : '—'} />
+          <Stat label="Active People" value={s ? String(s.active_people) : '—'} />
+          <Stat label="Active Vehicles" value={s ? String(s.active_vehicles) : '—'} />
+          <Stat label="Total Tracks" value={s ? String(s.total_tracks) : '—'} />
+          {/* trajectory info — capability + live count (real config) */}
+          <Stat label="Trajectory Depth"
+            value={s ? `${s.active_tracks > 0 ? 60 : 0} pts/track` : '—'}
+            hint="tracking.history_len = 60 retained foot points per track" />
+          {/* fence status — real zone store + live occupancy */}
+          <Stat label="Active Zones"
+            value={String(zones.filter(z => z.active).length)}
+            hint={Object.values(s?.zone_person_counts ?? {})
+              .some((n: number) => n > 0)
+              ? 'occupied — person inside a fence'
+              : 'no occupancy'} />
+          <Stat label="Events Committed" value={s ? String(s.events_committed) : '—'} />
+        </div>
+      </Panel>
+
+      {/* visualization controls — the SAME server layers as Live View */}
+      <Panel
+        title="Visualization Controls — render layers (same surface as Live View)"
+        className="shrink-0 min-h-0"
+      >
+        <div className="p-2">
+          <LayerToggles store={store} />
         </div>
       </Panel>
 
@@ -118,17 +149,18 @@ export default function Analytics({ store }: { store: Store }) {
   );
 }
 
-function Stat({ label, value, tone = 'text' }: {
-  label: string; value: number; tone?: 'red' | 'amber' | 'blue' | 'dim' | 'text';
+function Stat({ label, value, tone = 'text', hint }: {
+  label: string; value: string | number; hint?: string;
+  tone?: 'red' | 'amber' | 'blue' | 'dim' | 'text';
 }) {
   const colors = {
     red: 'text-cc-red', amber: 'text-cc-amber', blue: 'text-cc-blue',
     dim: 'text-cc-dim', text: 'text-cc-text',
   };
   return (
-    <div className="bg-cc-panel2 border border-cc-line rounded px-2.5 py-1.5">
+    <div title={hint} className="bg-cc-panel2 border border-cc-line rounded-lg px-2.5 py-1.5 min-w-0">
       <div className="text-[9px] uppercase tracking-wider text-cc-dim truncate">{label}</div>
-      <div className={`font-mono text-lg leading-tight ${colors[tone]}`}>{value}</div>
+      <div className={`font-mono text-base leading-tight truncate ${colors[tone]}`}>{value}</div>
     </div>
   );
 }

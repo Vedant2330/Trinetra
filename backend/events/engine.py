@@ -47,6 +47,19 @@ _DETECT_TYPES = {
 _VEHICLE_CLASSES = frozenset(
     {"bicycle", "car", "motorcycle", "bus", "truck"})
 
+_NEW_TYPE_BASE: dict[str, str] = {
+    "SUSPECTED_RUNNING": "MEDIUM",
+    "SUSPECTED_ABNORMAL_MOVEMENT": "MEDIUM",
+    "LOITERING": "LOW",
+    "NIGHT_MOVEMENT": "MEDIUM",
+    "CROWD_DENSITY_HIGH": "HIGH",
+    "CROWD_DENSITY_MEDIUM": "MEDIUM",
+    "ANPR_READ": "INFO",
+    "ANPR_PLATE_DETECTED": "INFO",
+    "OCR_UNCERTAIN": "LOW",
+    "FACE_DETECTED": "LOW",
+}
+
 
 @dataclass(frozen=True)
 class CommittedEvent:
@@ -232,6 +245,15 @@ class EventEngine:
         elif d.type in ("PERSON_DETECTED", "VEHICLE_DETECTED"):
             sev = "LOW"
             reasons.append(f"{d.type.split('_')[0].lower()} track confirmed")
+        elif d.type in _NEW_TYPE_BASE:
+            sev = _NEW_TYPE_BASE[d.type]
+            reasons.append(d.type.lower().replace("_", " "))
+            if ztype == "RESTRICTED":
+                sev = _raise(sev, 1)
+                reasons.append("RESTRICTED zone")
+            if is_night:
+                sev = _raise(sev, 1)
+                reasons.append("at night")
         else:  # system events
             sev = "INFO"
             reasons.append(d.type.lower().replace("_", " "))

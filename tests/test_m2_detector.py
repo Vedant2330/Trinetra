@@ -13,6 +13,7 @@ import pytest
 
 from backend.core.config import MODELS_DIR, VISION
 from backend.vision import DetectorError, DetectorTracker
+from backend.vision.tracker import COCO_NAMES
 
 ASSETS = Path(__file__).parent / "assets"
 
@@ -110,7 +111,8 @@ def test_class_filter_only_configured_classes(detector, person_frame):
     allowed = set(VISION.classes)
     assert all(o.class_id in allowed for o in objs)
     names = {o.class_name for o in objs}
-    assert names.issubset({"person", "bicycle", "car", "motorcycle", "bus", "truck"})
+    allowed_names = {COCO_NAMES[c] for c in allowed if c in COCO_NAMES}
+    assert names.issubset(allowed_names)
 
 
 def test_tracked_object_structure(detector, person_frame):

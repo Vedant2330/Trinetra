@@ -31,6 +31,7 @@ from backend.sources.base import FramePacket, SourceError, SourceState, VideoSou
 
 class FileSource(VideoSource):
     is_live = False         # C2: live-source flag (webcam: True)
+    type_name = "file"      # §2.9: DB source-type registration
 
     def __init__(self, path: str | Path) -> None:
         self._path = self._require_file(path)
@@ -129,6 +130,25 @@ class FileSource(VideoSource):
             frame_index=self._index,
             source_id=self.source_id,
         )
+
+    def seek(self, video_ts: float) -> bool:
+        """Seek to timestamp in seconds."""
+        if self._cap is None or self._state not in (SourceState.OPEN, SourceState.EOF):
+            return False
+        if video_ts < 0:
+            video_ts = 0.0
+        target_frame = int(video_ts * self._fps) if self._fps > 0 else 0
+        if self._frame_count > 0:
+            target_frame = min(target_frame, max(0, self._frame_count - 1))
+
+        ok = self._cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+        if ok:
+            self._index = target_frame - 1
+            self._eof_reached = False
+            self._decode_fails = 0
+            self._state = SourceState.OPEN
+            return True
+        return False
 
     def release(self) -> None:
         if self._cap is not None:

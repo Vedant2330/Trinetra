@@ -19,3 +19,11 @@ html, body, #root {
 .sev-LOW     { color: #2563EB; border-color: #2563EB; }
 .sev-MEDIUM  { color: #D97706; border-color: #D97706; }
 .sev-HIGH    { color: #DC2626; border-color: #DC2626; font-weight: 600; }
+
+/* keyboard focus rings — visible, restrained (T3.2) */
+button:focus-visible, input:focus-visible, select:focus-visible,
+a:focus-visible, [role='button']:focus-visible {
+  outline: 2px solid #2563EB;
+  outline-offset: 1px;
+  border-radius: 2px;
+}

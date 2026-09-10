@@ -28,6 +28,7 @@ class ApiState:
         self.dao: Optional[DAO] = None
         self.hub: Optional[SseHub] = None
         self.zone_store: Optional[ZoneStore] = None
+        self.reid_service: Optional[object] = None   # Phase 2 (lazy type)
 
     def install(self, dao: DAO, hub: Optional[SseHub] = None,
                 zone_store: Optional[ZoneStore] = None) -> None:
@@ -40,6 +41,7 @@ class ApiState:
         self.dao = None
         self.hub = None
         self.zone_store = None
+        self.reid_service = None
 
 
 _state = ApiState()
@@ -64,6 +66,12 @@ def get_zone_store() -> ZoneStore:
         raise HTTPException(
             503, "zone store not initialized (lifespan not run)")
     return _state.zone_store
+
+
+def get_reid_service():
+    """Phase 2: the app-scoped MultiCameraReIdService (None when the
+    capability is disabled or not yet initialized — honest absence)."""
+    return _state.reid_service
 
 
 def install(dao: DAO, hub: Optional[SseHub] = None,

@@ -27,6 +27,7 @@ _DISCONNECT_STREAK = 10  # consecutive failed reads => ERROR (disconnect)
 
 class WebcamSource(VideoSource):
     is_live = True          # C2: live-source flag (files: False)
+    type_name = "webcam"    # §2.9: DB source-type registration
 
     def __init__(self, index: int = 0) -> None:
         if index < 0:

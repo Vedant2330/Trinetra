@@ -13,10 +13,16 @@ export interface Health {
   phase: string;
   uptime_s: number;
   device_policy: string;
-  models: { detector: { file: string; present: boolean; size_mb: number | null } };
+  models: {
+    detector: { file: string; present: boolean; size_mb: number | null };
+    reid?: { file: string; present: boolean; size_mb: number | null };
+    face?: { file: string; present: boolean; size_mb: number | null };
+  };
   db: { ok?: boolean };
   writer: { writer?: string } & Record<string, unknown>;
   active_session: string | null;
+  reid_enabled?: boolean;          // Phase 2: capability flag (config × model)
+  face_enabled?: boolean;          // Phase 3: capability flag (model present)
 }
 
 export interface SessionStatus {
@@ -32,6 +38,10 @@ export interface SessionPayload {
   pipeline_fps: number;
   active_tracks: number;
   total_tracks: number;
+  people_detected: number;      // V3: cumulative unique person tracks (C5)
+  vehicles_detected: number;    // V3: cumulative unique vehicle tracks
+  active_people: number;
+  active_vehicles: number;
   events_committed: number;
   zone_person_counts: Record<string, number>;
   error: string | null;
@@ -53,6 +63,7 @@ export interface EventRow {
   direction: string | null;
   is_night: boolean;
   snapshot_path: string | null;
+  severity_reason?: string;   // engine rows carry it (engine.py:88)
   metadata: Record<string, unknown> & { snapshot_skipped_low_disk?: boolean; severity_reason?: string };
   status: 'new' | 'acked' | string;
 }
@@ -123,6 +134,98 @@ export interface TrackAgg {
   last_seen: string;
   frames: number;
   max_conf: number;
+  trajectory?: { x: number; y: number; t: number }[] | null;
+}
+
+export interface SessionSummary {
+  session_id: string;
+  source_id: string;
+  status: string;
+  duration_s: number;
+  frames: number;
+  people_detected: number;
+  vehicles_detected: number;
+  unique_tracks: number;
+  events_by_severity: Record<string, number>;
+  events_by_type: Record<string, number>;
+  zones_breached: string[];
+  max_concurrent_people: number;
+  first_event_ts: string | null;
+  last_event_ts: string | null;
+  notes: string[];
+}
+
+export interface EventSummaryStructured {
+  what: {
+    type: string;
+    label: string;
+    severity: string;
+    confidence: number;
+  };
+  who: {
+    track_ids: number[];
+    class_names: string[];
+    identity: string | null;
+    identity_cameras: string[];
+  };
+  where: {
+    source_id: string;
+    source_label: string;
+    coordinates: { latitude: number; longitude: number } | null;
+    zone_id: string | null;
+    zone_name: string | null;
+    zone_kind: string | null;
+    zone_type: string | null;
+    geo_sectors: string[];
+  };
+  when: {
+    ts: string;
+    video_ts: number | null;
+    is_night: boolean;
+  };
+  movement: {
+    direction: string | null;
+    kinematics: Record<string, unknown> | null;
+  };
+  why: {
+    severity_reason: string | null;
+    summary: string;
+  };
+  evidence: {
+    snapshot_path: string | null;
+    snapshot_available: boolean;
+    skip_reason: string | null;
+  };
+}
+
+export interface EventSummaryData {
+  event_id: string;
+  session_id: string;
+  source_id: string;
+  what: string;
+  who: string;
+  where: string;
+  when: string;
+  movement: string;
+  why: string;
+  evidence: string;
+  narrative: string;
+  structured: EventSummaryStructured;
+}
+
+// ---- Phase 2 cross-camera Re-ID (backend/reid/integration.py) ----
+
+export interface ReidPerson {
+  global_person_id: string;
+  created_ts: number;
+  first_seen_ts: number;
+  last_seen_ts: number;
+  observations: number;
+  confidence: number;
+  cameras_visited: string[];
+  track_bindings: { camera_id: string; track_id: number; linked_ts: number; state: string }[];
+  candidate_count: number;
+  timeline?: { wall_ts: number; camera_id: string; track_id: number; kind: string; note?: string | null; zone_id?: string | null }[];
 }
 
 // ---- M7 geographic layer (ADR-002/003) ----

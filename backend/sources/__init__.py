@@ -8,6 +8,7 @@ VideoSource implementations:
 
 from backend.sources.base import FramePacket, SourceError, SourceState, VideoSource
 from backend.sources.file import FileSource
+from backend.sources.rtsp import RtspSource
 from backend.sources.webcam import WebcamSource, probe_webcams
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "SourceState",
     "VideoSource",
     "FileSource",
+    "RtspSource",
     "WebcamSource",
     "probe_webcams",
 ]

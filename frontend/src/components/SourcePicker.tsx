@@ -21,6 +21,7 @@ export default function SourcePicker({ store }: { store: Store }) {
   const [upload, setUpload] = useState<UploadInfo | null>(null);
   const [uploadPct, setUploadPct] = useState(0);
   const [pickedName, setPickedName] = useState<string | null>(null);
+  const [rtspUri, setRtspUri] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -60,7 +61,7 @@ export default function SourcePicker({ store }: { store: Store }) {
     if (f) void startFileUpload(f);
   };
 
-  const startSession = async (kind: 'file' | 'webcam', payload: { path?: string; index?: number }) => {
+  const startSession = async (kind: 'file' | 'webcam' | 'rtsp', payload: { path?: string; index?: number; uri?: string }) => {
     setBusy(true); setErr(null);
     try {
       await api.sessionStart({ type: kind, ...payload });
@@ -193,6 +194,31 @@ export default function SourcePicker({ store }: { store: Store }) {
               </button>
             </div>
           )}
+        </div>
+
+        {/* ── RTSP STREAM ── */}
+        <div className="border border-cc-line rounded p-2.5 bg-cc-panel2/40">
+          <div className="text-[11px] font-semibold text-cc-text mb-2">RTSP STREAM (IP CAMERA)</div>
+          <div className="space-y-2">
+            <input
+              type="text"
+              value={rtspUri}
+              onChange={e => setRtspUri(e.target.value)}
+              placeholder="rtsp://user:pass@192.168.1.50:554/live"
+              disabled={busy || active}
+              className="w-full text-[11px] font-mono px-2.5 py-1.5 bg-cc-bg border border-cc-line rounded text-cc-text placeholder-cc-dim/50 focus:outline-none focus:border-cc-accent"
+            />
+            <div className="text-[9px] font-mono text-cc-dim">
+              TCP interleaved transport enforced — credentials automatically sanitized
+            </div>
+            <button
+              disabled={busy || active || !rtspUri.trim()}
+              onClick={() => void startSession('rtsp', { uri: rtspUri.trim() })}
+              className="w-full text-[11px] font-mono px-3 py-1.5 border border-cc-accent/60 text-cc-accent rounded hover:bg-cc-accent/10 disabled:opacity-40 font-semibold"
+            >
+              {busy ? 'CONNECTING…' : 'CONNECT RTSP STREAM'}
+            </button>
+          </div>
         </div>
 
         {err && (

@@ -11,7 +11,7 @@ model = "yolov8n.pt"
 conf = 0.35
 imgsz = 640
 max_frame_width = 1280
-classes = [0, 1, 2, 3, 5, 7]          # person bicycle car motorcycle bus truck
+classes = [0, 1, 2, 3, 5, 7, 24, 26, 28, 39, 41, 56, 57, 58, 60, 62, 63, 67, 73]  # person, vehicles, bags, bottles/cups, furniture, electronics, books
 
 [tracking]
 min_confirm_frames = 3
@@ -47,3 +47,36 @@ retention_days = 7
 # Disk-low evidence gate (C12): snapshots skipped (event still commits,
 # flagged snapshot_skipped_low_disk) when free space falls below this.
 min_free_mb = 200
+
+# --- Phase 2 cross-camera Re-ID (M8 port; embedder = fast-reid ONNX via cv2.dnn) ---
+[reid]
+# Capability OFF by default (lazy: initialized on first enable, never at
+# boot, §44). Model: models/fast-reid_mobilenetv2.onnx (MIT, md5
+# 77a97e84aac88bdb3eeaa17dd6c57180, audit-measured margin 0.638).
+# embedder: "cv2dnn" (PRIMARY, zero new deps) | "dummy" (tests) | "torchscript" (retained seam)
+embedder = "cv2dnn"
+onnx_path = "fast-reid_mobilenetv2.onnx"
+model_path = "reid.ts"                  # TorchScript seam — NOT shipped (reid.ts rejected)
+enabled = false
+# Matcher thresholds (cosine). confirm >= links identities; candidate is
+# review-only and NEVER links. 0.55 must never merge (mandate §4).
+confirm_similarity = 0.80
+candidate_similarity = 0.55
+max_gap_s = 600.0
+exemplars_per_camera = 8
+# Selective sampling: embed at most every N seen ticks per track,
+# only after the track is structurally stable, never more often than
+# min_gap_s. ByteTrack stays the ONLY tracker.
+sample_interval_ticks = 25
+sample_min_frames_seen = 5
+sample_min_gap_s = 10.0
+
+# --- Phase 7 / P-HERMES Grounded Reasoning Assistant ---
+[hermes]
+enabled = true
+base_url = "https://api.tokenrouter.com/v1"
+model = "z-ai/glm-5.3-free"
+timeout_s = 60.0
+connect_timeout_s = 5.0
+max_context_events = 5
+status_cache_s = 60.0

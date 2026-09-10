@@ -11,3 +11,13 @@ __pycache__/
 # M7 frontend
 frontend/node_modules/
 frontend/dist/
+
+# SwiftPM build artifacts
+desktop/.build/
+
+# Oversized local recordings (GitHub 100MB/file limit)
+videos/Screen Recording*.mov
+videos/Untitled.mov
+
+# Stray duplicate of desktop/Sources/TrinetraApp/Resources/MapSample.png
+/MapSample.png

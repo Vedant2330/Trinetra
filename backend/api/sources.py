@@ -135,6 +135,17 @@ def _probe_file(path: Path) -> dict:
         raise HTTPException(422, f"cannot decode file: {e}") from e
 
 
+class SourceCreateRequest(BaseModel):
+    id: str
+    name: str | None = None
+    type: str = "rtsp"
+    uri: str | None = ""
+    latitude: float | None = None
+    longitude: float | None = None
+    label: str | None = None
+    status: str = "idle"
+
+
 @router.get("")
 def list_sources() -> dict:
     """Known sources (rows from the DB) + a live flag from the active
@@ -147,13 +158,82 @@ def list_sources() -> dict:
         active_id = session.source_id
     out = []
     for r in dao.sources_rows():
+        keys = set(r.keys())
         out.append({
             "id": r["id"], "name": r["name"] or r["id"],
             "type": r["type"], "status": r["status"],
             "live": r["id"] == active_id,
             "created_at": r["created_at"],
+            "latitude": r["latitude"] if "latitude" in keys else None,
+            "longitude": r["longitude"] if "longitude" in keys else None,
+            "label": r["label"] if "label" in keys else None,
         })
     return {"sources": out}
+
+
+@router.post("", status_code=201)
+def register_source(req: SourceCreateRequest) -> dict:
+    """Register or update a camera source with optional geographical coordinates."""
+    dao = get_dao()
+    sid = req.id.strip()
+    if not sid:
+        raise HTTPException(400, "source id cannot be empty")
+    dao.upsert_source(
+        sid,
+        type_=req.type.strip() or "rtsp",
+        uri=req.uri or "",
+        name=req.name or sid,
+        status=req.status or "idle",
+    )
+    if req.latitude is not None and req.longitude is not None:
+        if not (-90 <= req.latitude <= 90 and -180 <= req.longitude <= 180):
+            raise HTTPException(400, f"invalid coordinates ({req.latitude}, {req.longitude}) — latitude -90..90, longitude -180..180")
+        dao.set_source_geo(sid, req.latitude, req.longitude, req.label or req.name or sid)
+    row = dao.get_source(sid)
+    keys = set(row.keys()) if row else set()
+    return {
+        "status": "ok",
+        "source": {
+            "id": row["id"] if row else sid,
+            "name": row["name"] if row else sid,
+            "type": row["type"] if row else req.type,
+            "status": row["status"] if row else req.status,
+            "latitude": row["latitude"] if "latitude" in keys else None,
+            "longitude": row["longitude"] if "longitude" in keys else None,
+            "label": row["label"] if "label" in keys else None,
+        },
+    }
+
+
+@router.post("/seed-demo")
+def seed_demo_sources() -> dict:
+    """Idempotently seed 8 standard demo cameras and 2 perimeter sectors around command coordinates (28.6139, 77.2090)."""
+    dao = get_dao()
+    demo_cams = [
+        {"id": "CAM-01", "name": "North Gate Command", "type": "demo", "lat": 28.6139, "lng": 77.2090, "label": "North Gate Post", "status": "demo"},
+        {"id": "CAM-02", "name": "Perimeter West Tower", "type": "demo", "lat": 28.6145, "lng": 77.2075, "label": "Fence West Alpha", "status": "demo"},
+        {"id": "CAM-03", "name": "Outpost Delta Access", "type": "demo", "lat": 28.6128, "lng": 77.2105, "label": "Outpost Delta", "status": "demo"},
+        {"id": "CAM-04", "name": "Watchtower Sector 2", "type": "demo", "lat": 28.6152, "lng": 77.2112, "label": "Watchtower 2", "status": "demo"},
+        {"id": "CAM-05", "name": "Depot Logistics Entry", "type": "demo", "lat": 28.6122, "lng": 77.2078, "label": "Depot Entrance", "status": "demo"},
+        {"id": "CAM-06", "name": "South Checkpoint Barrier", "type": "demo", "lat": 28.6115, "lng": 77.2095, "label": "South Checkpoint", "status": "demo"},
+        {"id": "CAM-07", "name": "East Perimeter Fence", "type": "demo", "lat": 28.6148, "lng": 77.2120, "label": "Fence East Bravo", "status": "demo"},
+        {"id": "CAM-08", "name": "Helipad Approach", "type": "demo", "lat": 28.6120, "lng": 77.2110, "label": "Helipad Cam", "status": "demo"},
+    ]
+    seeded = []
+    for c in demo_cams:
+        dao.upsert_source(c["id"], type_=c["type"], name=c["name"], status=c["status"])
+        dao.set_source_geo(c["id"], latitude=c["lat"], longitude=c["lng"], label=c["label"])
+        seeded.append(c["id"])
+
+    # Seed sectors if none exist
+    existing_sectors = dao.geo_sectors_rows()
+    if not existing_sectors:
+        sec1 = [[28.6130, 77.2070], [28.6155, 77.2070], [28.6155, 77.2115], [28.6130, 77.2115]]
+        sec2 = [[28.6110, 77.2055], [28.6165, 77.2055], [28.6165, 77.2125], [28.6110, 77.2125]]
+        dao.insert_geo_sector("gs-alpha", "Command Restricted Zone", "sector", "High-security inner perimeter", json.dumps(sec1), True)
+        dao.insert_geo_sector("gs-bravo", "Perimeter Buffer Zone", "sector", "Outer perimeter surveillance zone", json.dumps(sec2), True)
+
+    return {"status": "ok", "seeded_cameras": seeded, "count": len(seeded)}
 
 
 # ---- session history (Investigation page) ----
@@ -181,20 +261,42 @@ def list_sessions(limit: int = 50) -> dict:
 @sessions_router.get("/{session_id}/tracks")
 def session_tracks(session_id: str) -> dict:
     """Flushed track aggregates (§14) for one session — first/last seen,
-    frames, max confidence, class. These are the REAL measurements the
-    Investigation page is allowed to show."""
+    frames, max confidence, class, and optional persisted trajectory."""
     dao = get_dao()
     row = dao.get_session(session_id)
     if row is None:
         raise HTTPException(404, f"session {session_id} not found")
-    rows = dao.conn.execute(
-        "SELECT track_id, class_name, first_seen, last_seen, frames,"
-        " max_conf FROM tracks WHERE session_id=? ORDER BY track_id",
-        (session_id,)).fetchall()
-    tracks = [{
-        "track_id": r["track_id"], "class_name": r["class_name"],
-        "first_seen": r["first_seen"], "last_seen": r["last_seen"],
-        "frames": r["frames"], "max_conf": round(r["max_conf"], 3),
-    } for r in rows]
+    rows = dao.get_tracks(session_id)
+    tracks = []
+    for r in rows:
+        traj = None
+        if "trajectory" in r.keys() and r["trajectory"]:
+            try:
+                traj = json.loads(r["trajectory"])
+            except Exception:
+                traj = None
+        t_entry = {
+            "track_id": r["track_id"],
+            "class_name": r["class_name"],
+            "first_seen": r["first_seen"],
+            "last_seen": r["last_seen"],
+            "frames": r["frames"],
+            "max_conf": round(r["max_conf"], 3),
+        }
+        if traj is not None:
+            t_entry["trajectory"] = traj
+        tracks.append(t_entry)
     return {"session_id": session_id, "tracks": tracks,
             "count": len(tracks)}
+
+
+@sessions_router.get("/{session_id}/summary")
+def session_summary(session_id: str) -> dict:
+    """Deterministic session audit summary (V3.5 / Task 5.2)."""
+    from backend.services.summary import generate_session_summary
+    dao = get_dao()
+    summary = generate_session_summary(dao, session_id)
+    if summary is None:
+        raise HTTPException(404, f"session {session_id} not found")
+    return summary
+

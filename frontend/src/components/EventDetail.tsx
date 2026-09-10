@@ -8,6 +8,7 @@
 import { evidenceUrl } from '../api';
 import type { Store } from '../store';
 import { EmptyState, Panel, SevChip, eventTypeLabel } from './ui';
+import { EventStructuredBlock } from './EventSummary';
 
 // ray-casting point-in-polygon over [[lat,lng], ...] sectors
 export function pointInSector(
@@ -46,6 +47,10 @@ export default function EventDetail({ store }: { store: Store }) {
   const camera = store.cameras.find(c => c.camera_id === ev.source_id) ?? null;
   const evUrl = evidenceUrl(ev);
   const sectors = containingSectors(store, ev.source_id);
+  // Phase 2: Re-ID identity chips — present in metadata ONLY when the
+  // track had a CONFIRMED identity (absent → nothing; never placeholder)
+  const globalPid = ev.metadata?.global_person_id as string | undefined;
+  const identityCameras = ev.metadata?.identity_cameras as string[] | undefined;
 
   return (
     <Panel
@@ -137,6 +142,59 @@ export default function EventDetail({ store }: { store: Store }) {
           <span className="text-cc-text">{(ev.confidence * 100).toFixed(1)}%</span>
         </div>
 
+        {/* Phase 2: Re-ID identity chips — rendered ONLY when the event
+            metadata actually carries them (CONFIRMED match; CANDIDATE
+            never links). Absent → nothing, never a placeholder. */}
+        {(globalPid || identityCameras) && (
+          <div className="flex items-center gap-2 flex-wrap">
+            {globalPid && (
+              <span
+                className="text-[10px] font-mono px-2 py-0.5 border border-cc-blue/60 text-cc-blue rounded-sm"
+                title="global person identity (Re-ID, CONFIRMED match — EXPERIMENTAL possible-match semantics)"
+              >
+                IDENTITY {globalPid}
+              </span>
+            )}
+            {identityCameras && identityCameras.length > 0 && (
+              <span
+                className="text-[10px] font-mono px-2 py-0.5 border border-cc-line text-cc-dim rounded-sm"
+                title="cameras this identity was observed on (possible-match semantics — never 'same person')"
+              >
+                SEEN ON {identityCameras.join(', ')}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Phase 6: ANPR Plate Chips */}
+        {(Boolean(ev.metadata?.plate_text) || ev.type.startsWith('ANPR_') || ev.type === 'OCR_UNCERTAIN') && (
+          <div className="flex items-center gap-2 flex-wrap">
+            {Boolean(ev.metadata?.plate_text) && (
+              <span
+                className="text-[10px] font-mono px-2 py-0.5 border border-cc-accent/60 text-cc-accent rounded-sm font-bold tracking-wider"
+                title={`License Plate: ${String(ev.metadata?.plate_text)} (${String(ev.metadata?.plate_type || 'standard')})`}
+              >
+                PLATE: {String(ev.metadata?.plate_text)}
+              </span>
+            )}
+            {Boolean(ev.metadata?.plate_type) && (
+              <span className="text-[10px] font-mono px-2 py-0.5 border border-cc-line text-cc-dim rounded-sm uppercase">
+                {String(ev.metadata?.plate_type).replace('_', ' ')}
+              </span>
+            )}
+            {Boolean(ev.metadata?.detection_mode) && (
+              <span className="text-[10px] font-mono px-2 py-0.5 border border-cc-line text-cc-dim rounded-sm">
+                MODE: {String(ev.metadata?.detection_mode).toUpperCase()}
+              </span>
+            )}
+            {Boolean(ev.metadata?.uncertain_reason) && (
+              <span className="text-[10px] font-mono px-2 py-0.5 border border-cc-amber/60 text-cc-amber rounded-sm">
+                UNCERTAIN: {String(ev.metadata?.uncertain_reason).replace('_', ' ').toUpperCase()}
+              </span>
+            )}
+          </div>
+        )}
+
         {/* evidence */}
         <div>
           <div className="text-[9px] uppercase tracking-wider text-cc-dim mb-1">Evidence Snapshot</div>
@@ -153,6 +211,12 @@ export default function EventDetail({ store }: { store: Store }) {
                 : 'no snapshot registered for this event (severity below threshold or system event)'}
             </div>
           )}
+        </div>
+
+        {/* Deterministic Structured Summary (P6) */}
+        <div>
+          <div className="text-[9px] uppercase tracking-wider text-cc-dim mb-1">Deterministic Audit Summary</div>
+          <EventStructuredBlock event={ev} store={store} />
         </div>
       </div>
     </Panel>

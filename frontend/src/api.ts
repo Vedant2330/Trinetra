@@ -2,8 +2,9 @@
 // Every function maps 1:1 to a real endpoint; nothing invented.
 
 import type {
-  EventRow, GeoCamera, GeoSector, Health, MapConfig, SessionHistory,
-  SessionStatus, SourceRow, TrackAgg, UploadInfo, WebcamScan, ZoneRow,
+  EventRow, EventSummaryData, GeoCamera, GeoSector, Health, MapConfig, ReidPerson,
+  SessionHistory, SessionStatus, SessionSummary, SourceRow, TrackAgg, UploadInfo,
+  WebcamScan, ZoneRow,
 } from './types';
 
 async function j<T>(res: Response): Promise<T> {
@@ -22,7 +23,7 @@ export const api = {
   sessionStatus: () =>
     fetch('/api/session/status').then(r => j<SessionStatus>(r)),
 
-  sessionStart: (body: { type: 'file' | 'webcam'; path?: string; index?: number }) =>
+  sessionStart: (body: { type: 'file' | 'webcam' | 'rtsp'; path?: string; index?: number; uri?: string }) =>
     fetch('/api/session/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -32,6 +33,17 @@ export const api = {
   sessionStop: () =>
     fetch('/api/session/stop', { method: 'POST' })
       .then(r => j<{ status: string; stopped: Record<string, unknown> | null }>(r)),
+
+  sessionLayersGet: () =>
+    fetch('/api/session/layers')
+      .then(r => j<{ layers: Record<string, boolean> }>(r)),
+
+  sessionLayersPost: (updates: Partial<Record<'boxes' | 'labels' | 'fps' | 'trajectories' | 'zones' | 'faces', boolean>>) =>
+    fetch('/api/session/layers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    }).then(r => j<{ layers: Record<string, boolean> }>(r)),
 
   events: (params: { session_id?: string; severity?: string; type?: string; limit?: number; before?: string; before_id?: string } = {}) => {
     const q = new URLSearchParams();
@@ -50,6 +62,9 @@ export const api = {
   ackEvent: (id: string) =>
     fetch(`/api/events/${id}/ack`, { method: 'POST' })
       .then(r => j<{ status: string; event_id: string; acked: boolean }>(r)),
+
+  eventSummary: (id: string) =>
+    fetch(`/api/events/${id}/summary`).then(r => j<EventSummaryData>(r)),
 
   zones: () =>
     fetch('/api/zones').then(r => j<{ zones: ZoneRow[] }>(r)),
@@ -108,6 +123,10 @@ export const api = {
     fetch(`/api/sessions/${id}/tracks`).then(r =>
       j<{ session_id: string; tracks: TrackAgg[]; count: number }>(r)),
 
+  sessionSummary: (id: string) =>
+    fetch(`/api/sessions/${id}/summary`).then(r =>
+      j<SessionSummary>(r)),
+
   // ---- M7 geographic layer ----
   mapConfig: () =>
     fetch('/api/map/config').then(r => j<MapConfig>(r)),
@@ -135,6 +154,15 @@ export const api = {
   deleteSector: (id: string) =>
     fetch(`/api/map/sectors/${id}`, { method: 'DELETE' })
       .then(r => j<{ status: string; deleted: string }>(r)),
+
+  // ---- Phase 2 cross-camera Re-ID ----
+  reidPersons: () =>
+    fetch('/api/reid/persons')
+      .then(r => j<{ persons: ReidPerson[]; count: number; note?: string }>(r)),
+
+  reidPerson: (pid: string) =>
+    fetch(`/api/reid/persons/${encodeURIComponent(pid)}`)
+      .then(r => j<ReidPerson>(r)),
 };
 
 // Evidence URL helper — the registered snapshot for an event, when any.

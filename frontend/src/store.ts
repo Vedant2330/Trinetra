@@ -10,7 +10,7 @@ import type {
 } from './types';
 
 export type Page =
-  | 'dashboard' | 'cameras' | 'events' | 'investigation'
+  | 'dashboard' | 'cameras' | 'events' | 'eventlog' | 'investigation'
   | 'geography' | 'analytics' | 'sources';
 
 export interface Store {

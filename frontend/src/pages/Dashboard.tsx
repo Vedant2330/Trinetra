@@ -3,22 +3,20 @@
 // AI/EVENT SUMMARY. Every value is REAL backend state; zero-when-zero.
 
 import EventDetail from '../components/EventDetail';
+import EventSummary from '../components/EventSummary';
 import EventTimeline from '../components/EventTimeline';
 import LiveFeed from '../components/LiveFeed';
 import { Metric, Panel, Pill, SevChip } from '../components/ui';
 import type { Store } from '../store';
 
 export default function Dashboard({ store }: { store: Store }) {
-  const { events, health } = store;
+  const { status, events, health } = store;
+  const s = status.session;
 
-  // summary cards — all real state, zero-when-zero
-  // people/vehicles: interim event-derived counts (per plan T0.5; the
-  // P1 T1.2 change replaces these with session-level truth)
-  let people = 0, vehicles = 0;
-  for (const e of events) {
-    if (e.type === 'PERSON_DETECTED') people += 1;
-    else if (e.type === 'VEHICLE_DETECTED') vehicles += 1;
-  }
+  // summary cards — real session-level counts (V3 T1.2: status_payload
+  // per-class fields, C5), zero when no session
+  const people = s?.people_detected ?? 0;
+  const vehicles = s?.vehicles_detected ?? 0;
   const activeAlerts = events.filter(e => e.status === 'new').length;
   const systemOnline = !!health?.ok;
 
@@ -76,11 +74,13 @@ export default function Dashboard({ store }: { store: Store }) {
             )}
           </div>
         </Panel>
-        <Panel title="AI / Event Summary" right={<Pill tone="amber">P1 — DETERMINISTIC, NO LLM</Pill>}>
-          <div className="p-2 text-[10px] font-mono text-cc-dim leading-relaxed">
-            Field-faithful event narrative lands in Phase 1 (deterministic
-            template over real EventRow fields — no invented facts, no LLM).
-          </div>
+        <Panel
+          title="AI / Event Summary"
+          right={<Pill tone="dim">deterministic · field-faithful · no LLM</Pill>}
+          scroll
+          className="min-h-0"
+        >
+          <EventSummary store={store} />
         </Panel>
       </div>
     </div>

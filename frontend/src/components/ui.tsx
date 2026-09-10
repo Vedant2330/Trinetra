@@ -100,10 +100,10 @@ export function eventTypeLabel(type: string): string {
 }
 
 export function eventTone(type: string): 'red' | 'green' | 'amber' | 'blue' | 'dim' {
-  if (type === 'ZONE_ENTRY') return 'red';
-  if (type === 'ZONE_EXIT' || type === 'SOURCE_LOST') return 'amber';
+  if (type === 'ZONE_ENTRY' || type === 'ANPR_READ') return 'green';
+  if (type === 'ZONE_EXIT' || type === 'SOURCE_LOST' || type === 'OCR_UNCERTAIN') return 'amber';
   if (type === 'SOURCE_CONNECTED' || type === 'SOURCE_RECONNECTED'
     || type === 'SESSION_COMPLETED') return 'green';
-  if (type === 'PERSON_DETECTED' || type === 'VEHICLE_DETECTED') return 'blue';
+  if (type === 'PERSON_DETECTED' || type === 'VEHICLE_DETECTED' || type === 'ANPR_PLATE_DETECTED' || type === 'FACE_DETECTED') return 'blue';
   return 'dim';
 }

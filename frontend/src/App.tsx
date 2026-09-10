@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import Analytics from './pages/Analytics';
 import Cameras from './pages/Cameras';
 import Dashboard from './pages/Dashboard';
+import EventLog from './pages/EventLog';
 import Events from './pages/Events';
 import Geography from './pages/Geography';
 import Investigation from './pages/Investigation';
@@ -18,6 +19,7 @@ const NAV: { id: Page; label: string; glyph: string }[] = [
   { id: 'dashboard', label: 'Command Center', glyph: '▦' },
   { id: 'cameras', label: 'Live View', glyph: '◎' },
   { id: 'events', label: 'Alerts', glyph: '⚡' },
+  { id: 'eventlog', label: 'Event Log', glyph: '≡' },
   { id: 'investigation', label: 'Investigation', glyph: '⌕' },
   { id: 'geography', label: 'Map', glyph: '⌖' },
   { id: 'analytics', label: 'Analytics', glyph: '∿' },
@@ -40,7 +42,7 @@ export default function App() {
 
   const Page = {
     dashboard: Dashboard, cameras: Cameras, events: Events,
-    investigation: Investigation, geography: Geography,
+    eventlog: EventLog, investigation: Investigation, geography: Geography,
     analytics: Analytics, sources: Sources,
   }[store.page];
 
@@ -89,30 +91,34 @@ export default function App() {
 
       {/* ── shell: nav + workspace ── */}
       <div className="flex flex-1 min-h-0">
-        <nav className="w-44 border-r border-cc-line bg-cc-panel flex flex-col shrink-0">
+        <nav className="w-44 lg:w-44 max-lg:w-12 border-r border-cc-line bg-cc-panel flex flex-col shrink-0">
           <div className="flex-1 py-2">
             {NAV.map(n => (
               <button
                 key={n.id}
                 onClick={() => store.setPage(n.id)}
-                className={`w-full text-left px-4 py-2.5 text-[12px] flex items-center gap-3 border-l-2 transition-colors ${
+                title={n.label}
+                className={`w-full text-left px-4 max-lg:px-0 max-lg:text-center max-lg:justify-center py-2.5 text-[12px] flex items-center gap-3 border-l-2 transition-colors ${
                   store.page === n.id
                     ? 'border-cc-accent text-cc-text bg-cc-panel2 font-semibold'
                     : 'border-transparent text-cc-dim hover:text-cc-text hover:bg-cc-panel2/60'
                 }`}
               >
                 <span className="text-cc-accent/80 font-mono">{n.glyph}</span>
-                {n.label}
+                <span className="max-lg:hidden">{n.label}</span>
                 {n.id === 'events' && unacked > 0 && (
-                  <span className="ml-auto text-cc-amber text-[10px] font-mono">{unacked}</span>
+                  <span className="ml-auto max-lg:hidden text-cc-amber text-[10px] font-mono">{unacked}</span>
                 )}
               </button>
             ))}
           </div>
           {/* AI assistant status — honest NOT CONNECTED until Hermes wiring exists */}
-          <div className="border-t border-cc-line px-4 py-3">
-            <div className="text-[9px] uppercase tracking-wider text-cc-dim mb-1">AI Assistant</div>
-            <Pill tone="amber" title="Hermes assistant not connected in this build">HERMES — NOT CONNECTED</Pill>
+          <div className="border-t border-cc-line px-4 max-lg:px-0 max-lg:text-center py-3">
+            <div className="text-[9px] uppercase tracking-wider text-cc-dim mb-1 max-lg:hidden">AI Assistant</div>
+            <div className="max-lg:hidden">
+              <Pill tone="amber" title="Hermes assistant not connected in this build">HERMES — NOT CONNECTED</Pill>
+            </div>
+            <span className="lg:hidden text-[9px] font-mono text-cc-dim" title="Hermes assistant not connected in this build">✦</span>
           </div>
         </nav>
 

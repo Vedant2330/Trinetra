@@ -12,9 +12,13 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException
+from pathlib import Path
 
+from fastapi import APIRouter, HTTPException, Response
+
+from backend.core import config as cfg
 from backend.core.errors import get_dao
+from backend.services.summary import generate_event_summary
 
 log = logging.getLogger("trinetra.api.events")
 router = APIRouter(prefix="/api/events", tags=["events"])
@@ -78,3 +82,54 @@ def ack_event(event_id: str) -> dict:
     if not existed:
         raise HTTPException(404, f"event {event_id} not found")
     return {"status": "ok", "event_id": event_id, "acked": newly}
+
+
+@router.get("/{event_id}/summary")
+def get_event_summary_endpoint(event_id: str) -> dict:
+    """Deterministic structured event audit summary (V3.5 / Phase 6).
+
+    Answers WHAT/WHO/WHERE/WHEN/MOVEMENT/WHY/EVIDENCE from real database rows.
+    """
+    dao = get_dao()
+    summary = generate_event_summary(dao, event_id)
+    if summary is None:
+        raise HTTPException(404, f"event {event_id} not found")
+    return summary
+
+
+@router.get("/{event_id}/snapshot")
+def get_event_snapshot(event_id: str) -> Response:
+    """Serve the JPEG snapshot for an event if available."""
+    dao = get_dao()
+    event_row = dao.get_event(event_id)
+    if event_row is None:
+        raise HTTPException(404, f"event {event_id} not found")
+
+    snapshot_path = event_row["snapshot_path"]
+    if not snapshot_path:
+        ev_rows = dao.conn.execute("SELECT path FROM evidence WHERE event_id=?", (event_id,)).fetchall()
+        if ev_rows:
+            snapshot_path = ev_rows[0]["path"]
+
+    if not snapshot_path:
+        raise HTTPException(404, f"no snapshot available for event {event_id}")
+
+    p = Path(snapshot_path)
+    if not p.is_absolute():
+        p = cfg.EVIDENCE_DIR / p
+
+    try:
+        resolved = p.resolve(strict=True)
+        if not resolved.is_file() or resolved.is_symlink() or cfg.EVIDENCE_DIR.resolve() not in resolved.parents:
+            raise HTTPException(404, "snapshot file not in evidence directory")
+        data = resolved.read_bytes()
+    except (OSError, RuntimeError) as e:
+        raise HTTPException(404, f"snapshot file not accessible: {e}")
+
+    return Response(
+        content=data,
+        media_type="image/jpeg" if resolved.suffix.lower() in (".jpg", ".jpeg") else "application/octet-stream",
+        headers={"Cache-Control": "private, max-age=60"},
+    )
+
+

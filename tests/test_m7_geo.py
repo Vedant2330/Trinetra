@@ -47,7 +47,7 @@ def stack(tmp_path):
 def test_migration2_geo_layer_applies(tmp_path):
     db = Database(tmp_path / "geo.db")
     db.migrate(MIGRATIONS)
-    assert db.user_version() == 2
+    assert db.user_version() >= 2
     names = {r[1] for r in db.conn().execute("PRAGMA table_info(sources)")}
     assert {"latitude", "longitude", "label"} <= names
     tables = {r[0] for r in db.conn().execute(

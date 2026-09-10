@@ -23,6 +23,6 @@ def test_health() -> None:
 def test_config_loads() -> None:
     assert VISION.model == "yolov8n.pt"
     assert VISION.conf == 0.35
-    assert VISION.classes == [0, 1, 2, 3, 5, 7]
+    assert VISION.classes == [0, 1, 2, 3, 5, 7, 24, 26, 28, 39, 41, 56, 57, 58, 60, 62, 63, 67, 73]
     assert (MODELS_DIR / VISION.model).exists()
     assert str(DB_PATH).endswith("data/trinetra.db")

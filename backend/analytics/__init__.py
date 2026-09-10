@@ -8,7 +8,15 @@ Design (frozen Phase 1 §11):
     lists and mutate ONLY their own private state.
 """
 
+from backend.analytics.anpr import (
+    ANPRAnalytic,
+    classify_anpr_read,
+    clean_plate_text,
+    locate_plate_heuristic,
+    validate_indian_plate,
+)
 from backend.analytics.base import AnalyticModule, EventDraft, FrameContext
+from backend.analytics.crowd import CrowdDensityAnalytic
 from backend.analytics.fence import FenceAnalytic
 from backend.analytics.geometry import (
     LineGeometryError,
@@ -19,20 +27,28 @@ from backend.analytics.geometry import (
     validate_line_geometry,
     validate_polygon_geometry,
 )
+from backend.analytics.kinematics import KinematicTrajectoryAnalytic
 from backend.analytics.zones import Zone, ZoneStore
 
 __all__ = [
+    "ANPRAnalytic",
     "AnalyticModule",
+    "CrowdDensityAnalytic",
     "EventDraft",
     "FrameContext",
     "FenceAnalytic",
+    "KinematicTrajectoryAnalytic",
     "LineGeometryError",
     "PolygonGeometryError",
     "Zone",
     "ZoneStore",
+    "classify_anpr_read",
+    "clean_plate_text",
+    "locate_plate_heuristic",
     "point_in_polygon",
     "segments_intersect",
     "side_sign",
+    "validate_indian_plate",
     "validate_line_geometry",
     "validate_polygon_geometry",
 ]
