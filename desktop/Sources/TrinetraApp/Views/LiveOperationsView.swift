@@ -64,13 +64,13 @@ public struct LiveOperationsView: View {
             ZStack {
                 Color.black
 
-                if let player = state.avPlayer {
-                    NativeVideoPlayerView(player: player)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let frame = state.currentFrame {
+                if let frame = state.currentFrame {
                     Image(nsImage: frame)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let player = state.avPlayer {
+                    NativeVideoPlayerView(player: player)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     VStack(spacing: 16) {

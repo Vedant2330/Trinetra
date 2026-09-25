@@ -11,7 +11,7 @@ import type {
 
 export type Page =
   | 'dashboard' | 'cameras' | 'events' | 'eventlog' | 'investigation'
-  | 'geography' | 'analytics' | 'sources';
+  | 'geography' | 'analytics' | 'sources' | 'settings';
 
 export interface Store {
   page: Page;

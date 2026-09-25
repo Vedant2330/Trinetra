@@ -11,6 +11,7 @@ import EventLog from './pages/EventLog';
 import Events from './pages/Events';
 import Geography from './pages/Geography';
 import Investigation from './pages/Investigation';
+import Settings from './pages/Settings';
 import Sources from './pages/Sources';
 import { StatusDot, Pill } from './components/ui';
 import { useStore, type Page } from './store';
@@ -24,6 +25,7 @@ const NAV: { id: Page; label: string; glyph: string }[] = [
   { id: 'geography', label: 'Map', glyph: '⌖' },
   { id: 'analytics', label: 'Analytics', glyph: '∿' },
   { id: 'sources', label: 'Cameras', glyph: '⬒' },
+  { id: 'settings', label: 'Settings', glyph: '⚙' },
 ];
 
 export default function App() {
@@ -43,7 +45,7 @@ export default function App() {
   const Page = {
     dashboard: Dashboard, cameras: Cameras, events: Events,
     eventlog: EventLog, investigation: Investigation, geography: Geography,
-    analytics: Analytics, sources: Sources,
+    analytics: Analytics, sources: Sources, settings: Settings,
   }[store.page];
 
   const sessionSrc = status.session?.source_id ?? null;

@@ -282,14 +282,19 @@ class FenceAnalytic(AnalyticModule):
         """Real occupancy -> live count per zone id (no events).
 
         A1: called from API threads (/api/session/status) while the
-        session thread mutates _occupancy — iterate a SNAPSHOT
-        (list()), the same pattern the purge/absent paths use, so a
-        concurrent insert never raises dict-changed-size."""
-        counts: dict[str, int] = {}
-        for (_track_id, zone_id), occ in list(self._occupancy.items()):
-            if occ.inside:
-                counts[zone_id] = counts.get(zone_id, 0) + 1
-        return counts
+        session thread mutates _occupancy — retry snapshot on concurrent
+        dict mutation so a race never raises dict-changed-size."""
+        for _ in range(20):
+            try:
+                items = list(self._occupancy.items())
+                counts: dict[str, int] = {}
+                for (_track_id, zone_id), occ in items:
+                    if occ.inside:
+                        counts[zone_id] = counts.get(zone_id, 0) + 1
+                return counts
+            except RuntimeError:
+                continue
+        return {}
 
     # ---- draft construction ----
 

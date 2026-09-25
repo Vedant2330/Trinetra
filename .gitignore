@@ -21,3 +21,6 @@ videos/Untitled.mov
 
 # Stray duplicate of desktop/Sources/TrinetraApp/Resources/MapSample.png
 /MapSample.png
+
+# October desktop — local canvas state
+.october/
