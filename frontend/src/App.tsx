@@ -15,6 +15,7 @@ import Settings from './pages/Settings';
 import Sources from './pages/Sources';
 import { StatusDot, Pill } from './components/ui';
 import { useStore, type Page } from './store';
+import { initTheme, useSystemThemeEffect, type Theme } from './hooks/useTheme';
 
 const NAV: { id: Page; label: string; glyph: string }[] = [
   { id: 'dashboard', label: 'Command Center', glyph: '▦' },
@@ -31,6 +32,13 @@ const NAV: { id: Page; label: string; glyph: string }[] = [
 export default function App() {
   const store = useStore();
   const { health, sseState, status, clock } = store;
+  // Theme — dark-first, persisted, system-aware. Bootstrapped before
+  // first paint (index.html) so there is no flash; this is the toggle.
+  const [theme, setTheme] = useState<Theme>('system');
+  useEffect(() => { setTheme(initTheme()); }, []);
+  useSystemThemeEffect();
+  const resolvedDark = theme === 'dark' || (theme !== 'light' &&
+    typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   const unacked = store.events.filter(e => e.status === 'new').length;
   const high = store.events.filter(
     e => e.status === 'new' && e.severity === 'HIGH').length;
@@ -86,6 +94,14 @@ export default function App() {
         )}
         <span className="ml-auto flex items-center gap-3 text-[10px] font-mono text-cc-dim">
           {unacked > 0 && <span className="text-cc-amber">{unacked} UNACKED</span>}
+          <button
+            onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+            title={resolvedDark ? 'Switch to light mode' : 'Switch to dark mode'}
+            className="flex items-center gap-1 hover:text-cc-text transition-colors"
+          >
+            {resolvedDark ? '☾' : '☀'}
+            <span>{resolvedDark ? 'DARK' : 'LIGHT'}</span>
+          </button>
           <span>{clock.toLocaleTimeString()}</span>
           <span className="text-cc-dim/60">{clock.toLocaleDateString()}</span>
         </span>

@@ -2,28 +2,135 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body, #root {
-  height: 100%;
-  background: #F6F7F9;
-  color: #101418;
+/* ============================================================
+   TRINETRA Command Center — design token system
+   Dark-first. Semantic color. 4px spacing rhythm.
+   Every value is a token — no hardcoded colors in components.
+   ============================================================ */
+
+:root {
+  /* Light mode (default) */
+  --cc-bg: #F6F7F9;
+  --cc-panel: #FFFFFF;
+  --cc-panel2: #F2F4F6;
+  --cc-line: #E3E7EB;
+  --cc-text: #101418;
+  --cc-dim: #5C6672;
+  --cc-accent: #16A34A;
+  --cc-red: #DC2626;
+  --cc-amber: #D97706;
+  --cc-blue: #2563EB;
+
+  /* State overlays */
+  --cc-accent-bg: rgba(22, 163, 74, 0.08);
+  --cc-red-bg: rgba(220, 38, 38, 0.08);
+  --cc-amber-bg: rgba(217, 119, 6, 0.08);
+  --cc-blue-bg: rgba(37, 99, 235, 0.08);
 }
 
-/* thin scrollbars — command-center density (light) */
-*::-webkit-scrollbar { width: 6px; height: 6px; }
+.dark {
+  /* Dark mode — deep navy-black, Apple/SwiftUI intelligence aesthetic */
+  --cc-bg: #0B0F14;
+  --cc-panel: #11171E;
+  --cc-panel2: #161D26;
+  --cc-line: #1E2834;
+  --cc-text: #E8EBF0;
+  --cc-dim: #7A8796;
+  --cc-accent: #22C55E;
+  --cc-red: #EF4444;
+  --cc-amber: #F59E0B;
+  --cc-blue: #3B82F6;
+
+  /* State overlays — slightly stronger in dark (spec) */
+  --cc-accent-bg: rgba(34, 197, 94, 0.12);
+  --cc-red-bg: rgba(239, 68, 68, 0.12);
+  --cc-amber-bg: rgba(245, 158, 11, 0.12);
+  --cc-blue-bg: rgba(59, 130, 246, 0.12);
+}
+
+/* ---- Base ---- */
+html, body, #root {
+  height: 100%;
+  background: var(--cc-bg);
+  color: var(--cc-text);
+  font-family: var(--font-sans, ui-sans-serif, system-ui, -apple-system, sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ---- Scrollbars — command-center density ---- */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-track { background: transparent; }
-*::-webkit-scrollbar-thumb { background: #C9CFD6; border-radius: 3px; }
-*::-webkit-scrollbar-thumb:hover { background: #B4BCC5; }
+*::-webkit-scrollbar-thumb { background: var(--cc-line); border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--cc-dim); }
 
-/* severity chip (light mode) */
-.sev-INFO    { color: #5C6672; border-color: #E3E7EB; }
-.sev-LOW     { color: #2563EB; border-color: #2563EB; }
-.sev-MEDIUM  { color: #D97706; border-color: #D97706; }
-.sev-HIGH    { color: #DC2626; border-color: #DC2626; font-weight: 600; }
-
-/* keyboard focus rings — visible, restrained (T3.2) */
-button:focus-visible, input:focus-visible, select:focus-visible,
-a:focus-visible, [role='button']:focus-visible {
-  outline: 2px solid #2563EB;
+/* ---- Focus rings — visible, restrained ---- */
+:focus-visible {
+  outline: 2px solid var(--cc-blue);
   outline-offset: 1px;
   border-radius: 2px;
 }
+
+/* ---- Selection ---- */
+::selection {
+  background: var(--cc-blue);
+  color: white;
+}
+
+/* ---- Severity chips (light) ---- */
+.sev-INFO    { color: var(--cc-dim); border-color: var(--cc-line); }
+.sev-LOW     { color: var(--cc-blue); border-color: var(--cc-blue); }
+.sev-MEDIUM  { color: var(--cc-amber); border-color: var(--cc-amber); }
+.sev-HIGH    { color: var(--cc-red); border-color: var(--cc-red); font-weight: 600; }
+
+/* Dark mode severity overrides */
+.dark .sev-INFO    { color: var(--cc-dim); border-color: var(--cc-line); }
+.dark .sev-LOW     { color: var(--cc-blue); border-color: var(--cc-blue); }
+.dark .sev-MEDIUM  { color: var(--cc-amber); border-color: var(--cc-amber); }
+.dark .sev-HIGH    { color: var(--cc-red); border-color: var(--cc-red); font-weight: 600; }
+
+/* ---- Reduced motion ---- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---- Component classes ---- */
+
+/* Panel surface — three densities */
+.panel {
+  @apply bg-cc-panel border border-cc-line rounded-lg shadow-sm flex flex-col min-h-0;
+}
+.panel-elevated {
+  @apply bg-cc-panel2 border border-cc-line/60 shadow-sm;
+}
+.panel-subtle {
+  @apply bg-cc-panel2 border-0;
+}
+
+/* Data-table row states */
+.data-table-row { @apply border-b border-cc-line/60 hover:bg-cc-panel2/60 transition-colors; }
+.data-table-row-selected { @apply bg-cc-blue/5; }
+
+/* Skeleton loading — subtle pulse, matches final layout */
+.skeleton {
+  background: linear-gradient(90deg, var(--cc-panel2) 0%, var(--cc-line) 50%, var(--cc-panel2) 100%);
+  background-size: 200% 100%;
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+  border-radius: 4px;
+}
+@keyframes skeleton-pulse {
+  0%, 100% { background-position: 200% 0; }
+  50% { background-position: -200% 0; }
+}
+
+/* Page transition — opacity + translateY(4px) on mount */
+@keyframes fade-in {
+  0% { opacity: 0; transform: translateY(4px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.page-enter { animation: fade-in 160ms ease-out; }
